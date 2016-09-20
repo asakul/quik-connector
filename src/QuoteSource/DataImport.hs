@@ -13,7 +13,10 @@ import Foreign.C.Types
 import Foreign.C.String
 
 import QuoteSource.DDE
+import QuoteSource.XlParser
 import Data.IORef
+import Text.Printf
+import Data.Binary
 
 data ServerState = ServerState {
   dde :: DdeState,
@@ -21,22 +24,17 @@ data ServerState = ServerState {
 }
 
 ddeCallback :: IORef ServerState -> CUInt -> CUInt -> HANDLE -> HANDLE -> HANDLE -> HANDLE -> LPDWORD -> LPDWORD -> IO HANDLE
-ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2 = do
-  putStrLn "Callback"
-  return nullHANDLE
-
-{-
+ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2
     | msgType == ddeXtypConnect = handleConnect state hsz1 hsz2 
     | msgType == ddeXtypPoke = handlePoke state hsz1 hData
     | otherwise = do
-      print msgType
+      putStrLn $ printf "msgtype: %08x" $ toInteger msgType
       return nullHANDLE
   where
     handleConnect state hsz1 hsz2 = do
       myAppName <- appName <$> readIORef state
       myDdeState <- dde <$> readIORef state
       maybeAppName <- queryString myDdeState 256 hsz2
-      putStrLn "Connect"
       case maybeAppName of
         Just incomingAppName -> do
           putStrLn incomingAppName
@@ -46,10 +44,10 @@ ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2 = do
         Nothing -> return ddeResultFalse
 
     handlePoke state hsz1 hData = do
-      putStrLn "Poke"
-      return ddeResultAck
-      -}
-        
+      myDdeState <- dde <$> readIORef state
+      maybeTopic <- queryString myDdeState 256 hsz1
+      case maybeTopic of
+        Nothing -> return ddeResultFalse
 
 initDataImportServer :: String -> IO (IORef ServerState)
 initDataImportServer applicationName = do

@@ -5,9 +5,10 @@ import QuoteSource.DDE
 import QuoteSource.DataImport
 import Control.Concurrent
 import Control.Monad
+import Control.Monad.IO.Class
+import Data.IORef
+import Graphics.UI.Gtk hiding (Action, backspace)
 
-import Graphics.UI.FLTK.LowLevel.FL
-import Graphics.UI.FLTK.LowLevel.FLTKHS
 
 callback :: DdeCallback
 callback = undefined
@@ -15,11 +16,11 @@ callback = undefined
 main :: IO ()
 main = do
   dis <- initDataImportServer "atrade"
-  forever $ threadDelay 1000
-  window <- windowNew (Size (Width 320) (Height 170))
-                Nothing Nothing
-  end window
-  showWidget window
-  _ <- run
-  return ()
+  void initGUI
+  window <- windowNew
+  window `on` deleteEvent $ do
+    liftIO mainQuit
+    return False
+  widgetShowAll window
+  mainGUI
 

@@ -19,11 +19,13 @@ import Control.Exception
 import Control.Monad
 import Data.Bits
 import Data.Typeable
+import Data.ByteString hiding (map)
 import System.Win32.DLL
 import System.Win32.Types
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
+import Foreign.Marshal.Array
 
 data DdeException = ApiError String
   deriving (Show, Typeable)
@@ -47,28 +49,34 @@ ddeCpWinAnsi = 1004
 
 instance Exception DdeException
 
-foreign import stdcall unsafe "windows.h DdeInitializeW"
+foreign import ccall unsafe "windows.h DdeInitializeW"
   ddeInitialize :: LPDWORD -> FunPtr DdeCallback -> DWORD -> DWORD -> IO CUInt
 
-foreign import stdcall unsafe "windows.h DdeUninitialize"
+foreign import ccall unsafe "windows.h DdeUninitialize"
   ddeUninitialize :: DWORD -> IO BOOL
 
-foreign import stdcall unsafe "windows.h DdeCreateStringHandleW"
+foreign import ccall unsafe "windows.h DdeCreateStringHandleW"
   ddeCreateStringHandle :: DWORD -> LPSTR -> CInt -> IO HANDLE
 
-foreign import stdcall unsafe "windows.h DdeFreeStringHandleW"
+foreign import ccall unsafe "windows.h DdeFreeStringHandleW"
   ddeFreeStringHandle :: DWORD -> LPSTR -> IO HANDLE
 
-foreign import stdcall unsafe "windows.h DdeNameService"
+foreign import ccall unsafe "windows.h DdeNameService"
   ddeNameService :: DWORD -> HANDLE -> HANDLE -> CInt -> IO HANDLE
 
-foreign import stdcall unsafe "windows.h DdeCmpStringHandles"
+foreign import ccall unsafe "windows.h DdeCmpStringHandles"
   ddeCmpStringHandles :: HANDLE -> HANDLE -> IO CInt
 
-foreign import stdcall unsafe "windows.h DdeQueryStringW"
+foreign import ccall unsafe "windows.h DdeQueryStringW"
   ddeQueryString :: DWORD -> HANDLE -> CString -> DWORD -> CInt -> IO DWORD
 
-foreign import stdcall "wrapper"
+foreign import ccall unsafe "windows.h DdeAccessData"
+  ddeAccessData :: HANDLE -> LPDWORD -> IO (Ptr CUChar)
+
+foreign import ccall unsafe "windows.h DdeUnaccessData"
+  ddeUnaccessData :: HANDLE -> IO ()
+
+foreign import ccall "wrapper"
   mkCallbackPtr :: DdeCallback -> IO (FunPtr DdeCallback)
 
 data DdeState = DdeState {
@@ -90,8 +98,8 @@ initializeDde appName topicName callback = alloca (\instancePtr -> do
     when (rc /= CUInt 0) $ throw $ ApiError "Unable to initialize DDE"
 
     withCString appName (\appNameRaw -> withCString topicName (\topicNameRaw -> do
-      appNameHandle <- ddeCreateStringHandle instanceRaw appNameRaw 0
-      topicNameHandle <- ddeCreateStringHandle instanceRaw topicNameRaw 0
+      appNameHandle <- ddeCreateStringHandle instanceRaw appNameRaw ddeCpWinAnsi
+      topicNameHandle <- ddeCreateStringHandle instanceRaw topicNameRaw ddeCpWinAnsi
       when (appNameHandle == nullHANDLE || topicNameHandle == nullHANDLE) $ throw $ ApiError "Unable to create strings handles"
 
       rc2 <- ddeNameService instanceRaw appNameHandle nullPtr 1
@@ -111,4 +119,11 @@ queryString state maxSize handle = allocaBytes maxSize (\x -> do
   if rc == 0
     then return Nothing
     else Just <$> peekCAString x)
+
+accessData :: HANDLE -> IO ByteString
+accessData handle = alloca (\dataSizePtr -> do
+  dataPtr <- ddeAccessData handle dataSizePtr
+  dataSize <- peek dataSizePtr
+  pack . (map (toEnum . fromEnum)) <$> peekArray (fromEnum dataSize) dataPtr)
+
 

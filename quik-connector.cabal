@@ -20,7 +20,9 @@ library
                      , QuoteSource.DataImport
   build-depends:       base >= 4.7 && < 5
                      , Win32
-                     , fltkhs
+                     , gtk
+                     , binary
+                     , bytestring
   default-language:    Haskell2010
   extra-libraries:     "user32"
 
@@ -31,6 +33,7 @@ executable quik-connector-exe
   build-depends:       base
                      , quik-connector
                      , Win32
+                     , gtk
   default-language:    Haskell2010
   extra-libraries:     "user32"
 
