@@ -18,13 +18,26 @@ library
   exposed-modules:     Lib
                      , QuoteSource.DDE
                      , QuoteSource.DataImport
+  ghc-options:         -Wincomplete-patterns
   build-depends:       base >= 4.7 && < 5
                      , Win32
                      , gtk
                      , binary
+                     , data-binary-ieee754
                      , bytestring
+                     , text
+                     , Decimal
+                     , time
+                     , vector
+                     , containers
+                     , mtl
+                     , datetime
   default-language:    Haskell2010
   extra-libraries:     "user32"
+  other-modules:       QuoteSource.XlParser
+                     , QuoteSource.TableParser
+                     , QuoteSource.TableParsers.AllParamsTableParser
+                     , Data.ATrade
 
 executable quik-connector-exe
   hs-source-dirs:      app
