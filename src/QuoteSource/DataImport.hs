@@ -11,9 +11,9 @@ import Control.Monad.State.Strict
 import Data.ATrade
 import Data.IORef
 import Data.Time.Clock
-import QuoteSource.DDE
 import QuoteSource.TableParser
-import QuoteSource.XlParser
+import System.Win32.DDE
+import System.Win32.XlParser
 
 import qualified Data.Map as M
 

@@ -7,7 +7,7 @@ module QuoteSource.TableParsers.AllParamsTableParser (
 import qualified Data.Map.Lazy as M
 import QuoteSource.TableParser
 import Data.ATrade
-import QuoteSource.XlParser
+import System.Win32.XlParser
 import Data.Tuple
 import Data.Decimal
 import Control.Monad.State.Strict

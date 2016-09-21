@@ -5,7 +5,7 @@ module QuoteSource.TableParser (
   TableParserInstance(..)
 ) where
 
-import QuoteSource.XlParser
+import System.Win32.XlParser
 import Data.ATrade
 import Control.Monad.State.Strict
 import Data.Time.Clock

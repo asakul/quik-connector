@@ -1,6 +1,6 @@
 {-# LANGUAGE ForeignFunctionInterface, CPP #-}
 
-module QuoteSource.DDE (
+module System.Win32.DDE (
   initializeDde,
   destroyDde,
   DdeState,
@@ -33,7 +33,7 @@ import Data.Binary.Get
 import Data.Typeable
 import Data.ByteString hiding (map)
 import Data.IORef
-import QuoteSource.XlParser
+import System.Win32.XlParser
 import System.Win32.DLL
 import System.Win32.Types
 import Foreign

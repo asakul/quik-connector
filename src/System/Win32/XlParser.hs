@@ -1,5 +1,5 @@
 
-module QuoteSource.XlParser (
+module System.Win32.XlParser (
   XlData(..),
   xlParser
 ) where
