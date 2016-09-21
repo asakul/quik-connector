@@ -1,4 +1,3 @@
-{-# LANGUAGE ExistentialQuantification #-}
 
 module QuoteSource.DataImport
 (
@@ -14,12 +13,9 @@ import Data.IORef
 import Data.Time.Clock
 import QuoteSource.DDE
 import QuoteSource.TableParser
-import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.XlParser
 
 import qualified Data.Map as M
-
-data TableParserInstance = forall a . TableParser a => MkTableParser a
 
 data ServerState = ServerState {
   appName :: String,
@@ -41,9 +37,9 @@ ddeCallback state topic table = do
     _ -> return False
 
 
-initDataImportServer :: BoundedChan Tick -> String -> IO (ServerState, IORef DdeState)
-initDataImportServer tickChan applicationName = do
-  parsers <- newIORef $ M.fromList $ map (\p -> (getTableId p, MkTableParser p)) [mkAllParamsTableParser "allparams"]
+initDataImportServer :: [TableParserInstance] -> BoundedChan Tick -> String -> IO (ServerState, IORef DdeState)
+initDataImportServer parsers tickChan applicationName = do
+  parsers <- newIORef $ M.fromList $ map (\(MkTableParser p) -> (getTableId p, MkTableParser p)) parsers
   let s = ServerState { appName = applicationName, parsers = parsers, tickChannel = tickChan }
   d <- initializeDde applicationName "default" (ddeCallback s)
   return (s, d)

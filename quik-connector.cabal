@@ -19,6 +19,8 @@ library
                      , QuoteSource.DDE
                      , QuoteSource.DataImport
                      , Data.ATrade
+                     , QuoteSource.TableParser
+                     , QuoteSource.TableParsers.AllParamsTableParser
   ghc-options:         -Wincomplete-patterns
   build-depends:       base >= 4.7 && < 5
                      , Win32
@@ -37,8 +39,6 @@ library
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       QuoteSource.XlParser
-                     , QuoteSource.TableParser
-                     , QuoteSource.TableParsers.AllParamsTableParser
 
 executable quik-connector-exe
   hs-source-dirs:      app

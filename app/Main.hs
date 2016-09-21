@@ -10,6 +10,8 @@ import Data.IORef
 import Graphics.UI.Gtk hiding (Action, backspace)
 import Control.Concurrent.BoundedChan
 import Data.ATrade
+import QuoteSource.TableParsers.AllParamsTableParser
+import QuoteSource.TableParser
 
 callback :: DdeCallback
 callback = undefined
@@ -20,7 +22,7 @@ main = do
   forkIO $ forever $ do
     tick <- readChan chan
     when (datatype tick == Price) $ print tick
-  dis <- initDataImportServer chan "atrade"
+  dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
   void initGUI
   window <- windowNew
   window `on` deleteEvent $ do
