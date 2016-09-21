@@ -2,81 +2,59 @@
 
 module QuoteSource.DataImport
 (
+  ServerState,
   initDataImportServer,
-  ServerState
+  shutdownDataImportServer
 ) where
 
-import Foreign.Marshal.Alloc
-import System.Win32.DLL
-import System.Win32.Types
+import Control.Concurrent.BoundedChan
+import Control.Monad.State.Strict
+import Data.ATrade
+import Data.IORef
+import Data.Time.Clock
 import Foreign
-import Foreign.C.Types
 import Foreign.C.String
-
+import Foreign.C.Types
+import Foreign.Marshal.Alloc
 import QuoteSource.DDE
-import QuoteSource.XlParser
 import QuoteSource.TableParser
 import QuoteSource.TableParsers.AllParamsTableParser
-import Data.IORef
+import QuoteSource.XlParser
+import System.Win32.Types
 import Text.Printf
-import Data.Binary.Get
-import Data.Time.Clock
-import Control.Monad.State.Strict
+
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.Map as M
 
 data TableParserInstance = forall a . TableParser a => MkTableParser a
-instance TableParser TableParserInstance where
-  parseXlTable = parseXlTable
-  getTableId (MkTableParser a) = getTableId a
-  giveTimestampHint (MkTableParser a) t = MkTableParser (giveTimestampHint a t)
-
 
 data ServerState = ServerState {
-  dde :: DdeState,
   appName :: String,
-  parser :: TableParserInstance
+  parsers :: IORef (M.Map String TableParserInstance),
+  tickChannel :: BoundedChan Tick
 }
 
-ddeCallback :: IORef ServerState -> CUInt -> CUInt -> HANDLE -> HANDLE -> HANDLE -> HANDLE -> LPDWORD -> LPDWORD -> IO HANDLE
-ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2
-    | msgType == ddeXtypConnect = handleConnect state hsz1 hsz2
-    | msgType == ddeXtypPoke = handlePoke state hsz1 hData
-    | otherwise = return nullHANDLE
-  where
-    handleConnect state hsz1 hsz2 = do
-      myAppName <- appName <$> readIORef state
-      myDdeState <- dde <$> readIORef state
-      maybeAppName <- queryString myDdeState 256 hsz2
-      case maybeAppName of
-        Just incomingAppName -> do
-          putStrLn incomingAppName
-          return $ if incomingAppName == myAppName
-            then ddeResultTrue
-            else ddeResultFalse
-        Nothing -> return ddeResultFalse
-
-    handlePoke state hsz1 hData = do
-      myDdeState <- dde <$> readIORef state
-      maybeTopic <- queryString myDdeState 256 hsz1
-      case maybeTopic of
-        Nothing -> return ddeResultFalse
-        Just topic -> withDdeData hData (\xlData -> case runGetOrFail xlParser $ BL.fromStrict xlData of
-          Left (_,  _, errmsg) -> return ddeResultFalse
-          Right (_, _, table) -> do
-            myParser <- parser <$> readIORef state
-            when (topic == getTableId myParser) $ do
-              timeHint <- getCurrentTime
-              modifyIORef state (\s -> s { parser = giveTimestampHint (parser s) timeHint })
-              (MkTableParser myParser) <- parser <$> readIORef state
-              let (ticks, newState) = runState (parseXlTable table) myParser
-              modifyIORef state (\s -> s { parser = MkTableParser newState })
-            return ddeResultAck)
+ddeCallback :: ServerState -> String -> (Int, Int, [XlData]) -> IO Bool
+ddeCallback state topic table = do
+  myParsers <- readIORef $ parsers state
+  case M.lookup topic myParsers of
+    Just (MkTableParser myParser) -> do
+      timeHint <- getCurrentTime
+      let stateWithTimeHint = giveTimestampHint myParser timeHint
+      let (ticks, newState) = runState (parseXlTable table) $ stateWithTimeHint
+      modifyIORef (parsers state) (\m -> M.insert topic (MkTableParser newState) m)
+      writeList2Chan (tickChannel state) ticks
+      return True
+    _ -> return False
 
 
-initDataImportServer :: String -> IO (IORef ServerState)
-initDataImportServer applicationName = do
-  s <- newIORef ServerState { appName = applicationName, dde = nullDdeState, parser = MkTableParser $ mkAllParamsTableParser "allparams" }
+initDataImportServer :: BoundedChan Tick -> String -> IO (ServerState, IORef DdeState)
+initDataImportServer tickChan applicationName = do
+  parsers <- newIORef $ M.fromList $ map (\p -> (getTableId p, MkTableParser p)) [mkAllParamsTableParser "allparams"]
+  let s = ServerState { appName = applicationName, parsers = parsers, tickChannel = tickChan }
   d <- initializeDde applicationName "default" (ddeCallback s)
-  modifyIORef s (\state -> state {dde = d})
-  putStrLn "DataImportServer initialized"
-  return s
+  return (s, d)
+
+shutdownDataImportServer :: (ServerState, IORef DdeState) -> IO ()
+shutdownDataImportServer (state, dde) = readIORef dde >>= destroyDde
+
