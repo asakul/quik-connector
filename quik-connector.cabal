@@ -16,7 +16,6 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lib
-                     , QuoteSource.DDE
                      , QuoteSource.DataImport
                      , Data.ATrade
                      , QuoteSource.TableParser
@@ -36,9 +35,11 @@ library
                      , mtl
                      , datetime
                      , BoundedChan
+                     , hslogger
   default-language:    Haskell2010
   extra-libraries:     "user32"
-  other-modules:       QuoteSource.XlParser
+  other-modules:       System.Win32.XlParser
+                     , System.Win32.DDE
 
 executable quik-connector-exe
   hs-source-dirs:      app
@@ -49,6 +50,12 @@ executable quik-connector-exe
                      , Win32
                      , gtk
                      , BoundedChan
+                     , hslogger
+                     , aeson
+                     , bytestring
+                     , unordered-containers
+                     , vector
+                     , text
   default-language:    Haskell2010
   extra-libraries:     "user32"
 
