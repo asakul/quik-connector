@@ -12,18 +12,11 @@ import Control.Monad.State.Strict
 import Data.ATrade
 import Data.IORef
 import Data.Time.Clock
-import Foreign
-import Foreign.C.String
-import Foreign.C.Types
-import Foreign.Marshal.Alloc
 import QuoteSource.DDE
 import QuoteSource.TableParser
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.XlParser
-import System.Win32.Types
-import Text.Printf
 
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map as M
 
 data TableParserInstance = forall a . TableParser a => MkTableParser a
