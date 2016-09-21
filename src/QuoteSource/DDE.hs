@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE ForeignFunctionInterface, CPP #-}
 
 module QuoteSource.DDE (
   initializeDde,
@@ -11,8 +11,19 @@ module QuoteSource.DDE (
   ddeXtypPoke,
   ddeCpWinAnsi,
   queryString,
-  nullDdeState
+  nullDdeState,
+  accessData,
+  unaccessData,
+  withDdeData
 ) where
+
+#if defined(i386_HOST_ARCH)
+# define WINDOWS_CCONV stdcall
+#elif defined(x86_64_HOST_ARCH)
+# define WINDOWS_CCONV ccall
+#else
+# error Unknown mingw32 arch
+#endif
 
 import Control.Applicative
 import Control.Exception
@@ -49,34 +60,34 @@ ddeCpWinAnsi = 1004
 
 instance Exception DdeException
 
-foreign import ccall unsafe "windows.h DdeInitializeW"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeInitializeW"
   ddeInitialize :: LPDWORD -> FunPtr DdeCallback -> DWORD -> DWORD -> IO CUInt
 
-foreign import ccall unsafe "windows.h DdeUninitialize"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeUninitialize"
   ddeUninitialize :: DWORD -> IO BOOL
 
-foreign import ccall unsafe "windows.h DdeCreateStringHandleW"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeCreateStringHandleW"
   ddeCreateStringHandle :: DWORD -> LPSTR -> CInt -> IO HANDLE
 
-foreign import ccall unsafe "windows.h DdeFreeStringHandleW"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeFreeStringHandleW"
   ddeFreeStringHandle :: DWORD -> LPSTR -> IO HANDLE
 
-foreign import ccall unsafe "windows.h DdeNameService"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeNameService"
   ddeNameService :: DWORD -> HANDLE -> HANDLE -> CInt -> IO HANDLE
 
-foreign import ccall unsafe "windows.h DdeCmpStringHandles"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeCmpStringHandles"
   ddeCmpStringHandles :: HANDLE -> HANDLE -> IO CInt
 
-foreign import ccall unsafe "windows.h DdeQueryStringW"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeQueryStringW"
   ddeQueryString :: DWORD -> HANDLE -> CString -> DWORD -> CInt -> IO DWORD
 
-foreign import ccall unsafe "windows.h DdeAccessData"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeAccessData"
   ddeAccessData :: HANDLE -> LPDWORD -> IO (Ptr CUChar)
 
-foreign import ccall unsafe "windows.h DdeUnaccessData"
+foreign import WINDOWS_CCONV unsafe "windows.h DdeUnaccessData"
   ddeUnaccessData :: HANDLE -> IO ()
 
-foreign import ccall "wrapper"
+foreign import WINDOWS_CCONV "wrapper"
   mkCallbackPtr :: DdeCallback -> IO (FunPtr DdeCallback)
 
 data DdeState = DdeState {
@@ -124,6 +135,11 @@ accessData :: HANDLE -> IO ByteString
 accessData handle = alloca (\dataSizePtr -> do
   dataPtr <- ddeAccessData handle dataSizePtr
   dataSize <- peek dataSizePtr
-  pack . (map (toEnum . fromEnum)) <$> peekArray (fromEnum dataSize) dataPtr)
+  pack . map (toEnum . fromEnum) <$> peekArray (fromEnum dataSize) dataPtr)
 
+unaccessData :: HANDLE -> IO ()
+unaccessData = ddeUnaccessData
+
+withDdeData :: HANDLE -> (ByteString -> IO a) -> IO a
+withDdeData handle = bracket (accessData handle) (\_ -> unaccessData handle)
 

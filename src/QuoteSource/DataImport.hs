@@ -16,7 +16,8 @@ import QuoteSource.DDE
 import QuoteSource.XlParser
 import Data.IORef
 import Text.Printf
-import Data.Binary
+import Data.Binary.Get
+import qualified Data.ByteString.Lazy as BL
 
 data ServerState = ServerState {
   dde :: DdeState,
@@ -48,6 +49,12 @@ ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2
       maybeTopic <- queryString myDdeState 256 hsz1
       case maybeTopic of
         Nothing -> return ddeResultFalse
+        Just topic -> withDdeData hData (\xlData -> case runGetOrFail xlParser $ BL.fromStrict xlData of
+          Left (_,  _, errmsg) -> return ddeResultFalse
+          Right (_, _, (width, height, table)) -> do
+            putStrLn $ show width ++ ":" ++ show height
+            return ddeResultAck)
+          
 
 initDataImportServer :: String -> IO (IORef ServerState)
 initDataImportServer applicationName = do
