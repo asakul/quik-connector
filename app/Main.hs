@@ -73,12 +73,15 @@ parseConfig = withObject "object" $ \obj -> do
 
 main :: IO ()
 main = do
+  updateGlobalLogger rootLoggerName (setLevel DEBUG)
+  infoM "main" "Loading config"
   config <- readConfig "quik-connector.config.json"  
-  print config
+  infoM "main" "Config loaded"
   chan <- newBoundedChan 1000
   forkIO $ forever $ do
     tick <- readChan chan
     when (datatype tick == Price) $ print tick
+  infoM "main" "Starting data import server"
   dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
   void initGUI
   window <- windowNew
