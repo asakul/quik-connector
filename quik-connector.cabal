@@ -36,6 +36,7 @@ library
                      , datetime
                      , BoundedChan
                      , hslogger
+                     , zeromq4-haskell
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser

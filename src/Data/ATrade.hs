@@ -1,11 +1,18 @@
 
 module Data.ATrade (
   Tick(..),
-  DataType(..)
+  DataType(..),
+  serializeTick
 ) where
 
 import Data.Decimal
 import Data.Time.Clock
+import Data.DateTime
+import Data.ByteString.Lazy as B
+import Data.Text as T
+import Data.Text.Encoding as E
+import Data.List as L
+import Data.Binary.Builder
 
 data DataType = Unknown
   | Price
@@ -53,3 +60,19 @@ data Tick = Tick {
   volume :: Integer
 } deriving (Show, Eq)
 
+serializeTick :: Tick -> [ByteString]
+serializeTick tick = do
+  header : [rawdata]
+  where
+    header = B.fromChunks [ E.encodeUtf8 . T.pack $ security tick ]
+    rawdata = toLazyByteString $ mconcat [ 
+      putWord32le $ fromIntegral 1,
+      putWord64le $ fromIntegral . toSeconds . timestamp $ tick,
+      putWord32le $ fromIntegral . truncate . (* 1000000) . fractionalPart . utctDayTime . timestamp $ tick,
+      putWord32le $ fromIntegral . fromEnum . datatype $ tick,
+      putWord64le $ truncate . value $ tick,
+      putWord32le $ truncate . (* 1000000000) . fractionalPart $ value tick,
+      putWord32le $ fromIntegral $ volume tick ]
+    fractionalPart :: (RealFrac a) => a -> a
+    fractionalPart x = x - (fromIntegral (floor x))
+  
