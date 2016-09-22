@@ -61,12 +61,11 @@ data Tick = Tick {
 } deriving (Show, Eq)
 
 serializeTick :: Tick -> [ByteString]
-serializeTick tick = do
-  header : [rawdata]
+serializeTick tick = header : [rawdata]
   where
     header = B.fromChunks [ E.encodeUtf8 . T.pack $ security tick ]
     rawdata = toLazyByteString $ mconcat [ 
-      putWord32le $ fromIntegral 1,
+      putWord32le 1,
       putWord64le $ fromIntegral . toSeconds . timestamp $ tick,
       putWord32le $ fromIntegral . truncate . (* 1000000) . fractionalPart . utctDayTime . timestamp $ tick,
       putWord32le $ fromIntegral . fromEnum . datatype $ tick,
@@ -74,5 +73,5 @@ serializeTick tick = do
       putWord32le $ truncate . (* 1000000000) . fractionalPart $ value tick,
       putWord32le $ fromIntegral $ volume tick ]
     fractionalPart :: (RealFrac a) => a -> a
-    fractionalPart x = x - (fromIntegral (floor x))
+    fractionalPart x = x - fromIntegral (floor x)
   

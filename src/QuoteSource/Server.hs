@@ -16,8 +16,7 @@ data QuoteSourceServer = QuoteSourceServerState {
 }
 
 serverThread :: QuoteSourceServer -> IO ()
-serverThread state = do
-  finally serverThread' cleanup
+serverThread state = finally serverThread' cleanup
   where
     cleanup = close $ outSocket state
 
