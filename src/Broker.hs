@@ -16,6 +16,8 @@ data OrderPrice = Market | Limit Decimal | Stop Decimal Decimal
 data Operation = Buy | Sell
   deriving (Show, Eq)
 
+type OrderId = Integer
+
 data OrderState = Unsubmitted
   | Submitted
   | PartiallyExecuted
@@ -25,7 +27,7 @@ data OrderState = Unsubmitted
   | Error String
 
 data Order = Order {
-  orderId :: Integer,
+  orderId :: OrderId,
   orderAccountId :: String,
   orderSecurity :: String,
   orderPrice :: OrderPrice,
@@ -37,7 +39,7 @@ data Order = Order {
   deriving (Show, Eq)
 
 data Trade = Trade {
-  tradeOrderId :: Integer,
+  tradeOrderId :: OrderId,
   tradePrice :: Decimal,
   tradeQuantity :: Integer,
   tradeVolume :: Decimal,
@@ -47,4 +49,12 @@ data Trade = Trade {
   tradeTimestamp :: UTCTime,
   tradeSignalId :: SignalId }
   deriving (Show, Eq)
+
+data Broker = Broker {
+  accounts :: [String],
+  setTradeCallback :: Maybe (Trade -> IO ()),
+  setOrderCallback :: Maybe (Order -> IO ()),
+  submitOrder :: Order -> IO (),
+  cancelOrder :: OrderId -> IO ()
+}
 
