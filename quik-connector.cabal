@@ -20,6 +20,7 @@ library
                      , Data.ATrade
                      , QuoteSource.TableParser
                      , QuoteSource.TableParsers.AllParamsTableParser
+                     , QuoteSource.Server
   ghc-options:         -Wincomplete-patterns
   build-depends:       base >= 4.7 && < 5
                      , Win32
@@ -57,6 +58,7 @@ executable quik-connector-exe
                      , unordered-containers
                      , vector
                      , text
+                     , zeromq4-haskell
   default-language:    Haskell2010
   extra-libraries:     "user32"
 

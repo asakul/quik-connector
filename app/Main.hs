@@ -12,11 +12,13 @@ import Control.Concurrent.BoundedChan
 import Data.ATrade
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
+import QuoteSource.Server
 
 import System.Log.Logger
 import System.Log.Handler.Simple
 import System.Log.Handler (setFormatter)
 import System.Log.Formatter
+import System.ZMQ4
 
 import Data.Aeson
 import Data.Aeson.Types
@@ -78,16 +80,18 @@ main = do
   config <- readConfig "quik-connector.config.json"  
   infoM "main" "Config loaded"
   chan <- newBoundedChan 1000
-  forkIO $ forever $ do
-    tick <- readChan chan
-    when (datatype tick == Price) $ print tick
   infoM "main" "Starting data import server"
   dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
-  void initGUI
-  window <- windowNew
-  window `on` deleteEvent $ do
-    liftIO mainQuit
-    return False
-  widgetShowAll window
-  mainGUI
+  withContext (\ctx -> do
+    qsServer <- startQuoteSourceServer chan ctx (quotesourceEndpoint config)
+
+    void initGUI
+    window <- windowNew
+    window `on` deleteEvent $ do
+      liftIO mainQuit
+      return False
+    widgetShowAll window
+    mainGUI
+    stopQuoteSourceServer qsServer
+    infoM "main" "Main thread done")
 
