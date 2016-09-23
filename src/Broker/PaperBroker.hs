@@ -55,6 +55,7 @@ mkPaperBroker tickChan startCash accounts = do
     setOrderCallback = pbSetOrderCallback state,
     submitOrder = pbSubmitOrder state,
     cancelOrder = pbCancelOrder state,
+    getOrder = pbGetOrder state,
     destroyBroker = pbDestroyBroker state }
 
 brokerThread :: IORef PaperBrokerState -> IO ()
@@ -85,6 +86,7 @@ pbSubmitOrder state order = do
     Market -> executeMarketOrder state order
     Limit price -> submitLimitOrder state order
     Stop price trigger -> submitStopOrder state order
+    StopMarket trigger -> submitStopMarketOrder state order
 
   where
     executeMarketOrder state order = do
@@ -104,7 +106,8 @@ pbSubmitOrder state order = do
 
     submitLimitOrder = undefined
     submitStopOrder = undefined
-        
+    submitStopMarketOrder = undefined
+
     orderDatatype order = case orderOperation order of
       Buy -> BestOffer
       Sell -> BestBid
@@ -138,4 +141,7 @@ pbDestroyBroker state = do
   case maybeTid of
     Just tid -> killThread tid
     Nothing -> return ()
+
+pbGetOrder :: IORef PaperBrokerState -> OrderId -> IO (Maybe Order)
+pbGetOrder state oid = M.lookup oid . orders <$> readIORef state
 

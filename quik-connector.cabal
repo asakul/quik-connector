@@ -23,6 +23,7 @@ library
                      , QuoteSource.Server
                      , Broker
                      , Broker.PaperBroker
+                     , Broker.Server
   ghc-options:         -Wincomplete-patterns
   build-depends:       base >= 4.7 && < 5
                      , Win32
@@ -42,6 +43,8 @@ library
                      , zeromq4-haskell
                      , hashmap
                      , hashable
+                     , unordered-containers
+                     , aeson
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser
