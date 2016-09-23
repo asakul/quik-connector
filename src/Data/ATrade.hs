@@ -24,7 +24,7 @@ data DataType = Unknown
   | Volatility
   | TotalSupply
   | TotalDemand
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 instance Enum DataType where
   fromEnum x

@@ -1,5 +1,13 @@
 
 module Broker (
+  SignalId(..),
+  OrderPrice(..),
+  Operation(..),
+  OrderId(..),
+  OrderState(..),
+  Order(..),
+  Trade(..),
+  Broker(..)
 ) where
 
 import Data.Decimal
@@ -12,6 +20,7 @@ data SignalId = SignalId {
   deriving (Show, Eq)
 
 data OrderPrice = Market | Limit Decimal | Stop Decimal Decimal
+  deriving (Show, Eq)
 
 data Operation = Buy | Sell
   deriving (Show, Eq)
@@ -25,6 +34,7 @@ data OrderState = Unsubmitted
   | Cancelled
   | Rejected String
   | Error String
+  deriving (Show, Eq)
 
 data Order = Order {
   orderId :: OrderId,
@@ -52,9 +62,10 @@ data Trade = Trade {
 
 data Broker = Broker {
   accounts :: [String],
-  setTradeCallback :: Maybe (Trade -> IO ()),
-  setOrderCallback :: Maybe (Order -> IO ()),
-  submitOrder :: Order -> IO (),
-  cancelOrder :: OrderId -> IO ()
+  setTradeCallback :: Maybe (Trade -> IO ()) -> IO(),
+  setOrderCallback :: Maybe (Order -> IO ()) -> IO(),
+  submitOrder :: Order -> IO OrderId,
+  cancelOrder :: OrderId -> IO (),
+  destroyBroker :: IO ()
 }
 

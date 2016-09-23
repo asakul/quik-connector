@@ -14,6 +14,9 @@ import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
 import QuoteSource.Server
 
+import Broker
+import Broker.PaperBroker
+
 import System.Log.Logger
 import System.Log.Handler.Simple
 import System.Log.Handler (setFormatter)
@@ -72,18 +75,31 @@ parseConfig = withObject "object" $ \obj -> do
         tableName = tn,
         tableParams = params }
 
+forkBoundedChan :: Int -> Int -> BoundedChan a -> IO (ThreadId, [BoundedChan a])
+forkBoundedChan chans size source = do
+  sinks <- replicateM chans (newBoundedChan size)
+  tid <- forkIO $ forever $ do
+    v <- readChan source
+    mapM_ (`tryWriteChan` v) sinks
+
+  return (tid, sinks)
+
 
 main :: IO ()
 main = do
   updateGlobalLogger rootLoggerName (setLevel DEBUG)
   infoM "main" "Loading config"
-  config <- readConfig "quik-connector.config.json"  
+  config <- readConfig "quik-connector.config.json"
   infoM "main" "Config loaded"
   chan <- newBoundedChan 1000
   infoM "main" "Starting data import server"
   dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
+
+  (forkId, [c1, c2]) <- forkBoundedChan 2 1000 chan
+
+  broker <- mkPaperBroker c2 1000000 ["demo"]
   withContext (\ctx -> do
-    qsServer <- startQuoteSourceServer chan ctx (quotesourceEndpoint config)
+    qsServer <- startQuoteSourceServer c1 ctx (quotesourceEndpoint config)
 
     void initGUI
     window <- windowNew
@@ -94,4 +110,5 @@ main = do
     mainGUI
     stopQuoteSourceServer qsServer
     infoM "main" "Main thread done")
+  killThread forkId
 
