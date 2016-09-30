@@ -6,7 +6,7 @@ module QuoteSource.TableParser (
 ) where
 
 import System.Win32.XlParser
-import Data.ATrade
+import ATrade.Types
 import Control.Monad.State.Strict
 import Data.Time.Clock
 

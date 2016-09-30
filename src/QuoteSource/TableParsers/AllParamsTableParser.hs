@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 
 module QuoteSource.TableParsers.AllParamsTableParser (
   AllParamsTableParser,
@@ -6,7 +7,7 @@ module QuoteSource.TableParsers.AllParamsTableParser (
 
 import qualified Data.Map.Lazy as M
 import QuoteSource.TableParser
-import Data.ATrade
+import ATrade.Types
 import System.Win32.XlParser
 import Data.Tuple
 import Data.Decimal
@@ -14,6 +15,7 @@ import Control.Monad.State.Strict
 import Data.Time.Clock
 import Data.Maybe
 import Data.DateTime
+import qualified Data.Text as T
 
 data TableColumn = CUnknown
   | CTicker
@@ -54,7 +56,7 @@ type TableSchema = M.Map TableColumn Int
 data AllParamsTableParser = AllParamsTableParser {
   schema :: Maybe TableSchema,
   tableId :: String,
-  volumes :: M.Map String Integer,
+  volumes :: M.Map T.Text Integer,
   timestampHint :: UTCTime
 }
 
@@ -64,8 +66,8 @@ mkAllParamsTableParser id = AllParamsTableParser {
   volumes = M.empty,
   timestampHint = startOfTime }
 
-securityName :: String -> String -> String
-securityName classCode ticker = classCode ++ ('#' : ticker)
+securityName :: String -> String -> T.Text
+securityName classCode ticker = T.pack $ classCode ++ ('#' : ticker)
 
 parseSchema (width, height, cells) = M.fromList . zipWith (curry swap) [0..] $ map parseSchemaItem . take width $ cells
   where
@@ -126,7 +128,7 @@ parseWithSchema sch (width, height, cells) = do
                 return Nothing
           _ -> return Nothing
 
-    calculateTickVolume :: [XlData] -> String -> State AllParamsTableParser Integer
+    calculateTickVolume :: [XlData] -> T.Text -> State AllParamsTableParser Integer
     calculateTickVolume row secname = case M.lookup CVolume sch of
       Nothing -> return 1
       Just index -> case row `safeAt` index of

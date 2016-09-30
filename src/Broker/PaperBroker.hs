@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 
 module Broker.PaperBroker (
   PaperBrokerState,
@@ -7,17 +8,19 @@ module Broker.PaperBroker (
 import Data.Hashable
 import Data.Bits
 import Control.Concurrent.BoundedChan
-import Data.ATrade
+import ATrade.Types
 import Data.IORef
 import qualified Data.HashMap as M
-import Broker
+import qualified Data.Text as T
+import ATrade.Broker.Protocol
+import ATrade.Broker.Server
 import Data.Time.Clock
 import Data.Decimal
 import Control.Monad
 import Control.Concurrent hiding (readChan)
 import System.Log.Logger
 
-data TickMapKey = TickMapKey String DataType
+data TickMapKey = TickMapKey T.Text DataType
   deriving (Show, Eq, Ord)
 
 instance Hashable TickMapKey where
@@ -30,11 +33,10 @@ data PaperBrokerState = PaperBrokerState {
   orders :: M.Map OrderId Order,
   cash :: Decimal,
   orderIdCounter :: OrderId,
-  tradeCallback :: Maybe (Trade -> IO ()),
-  orderCallback :: Maybe (Order -> IO ())
+  notificationCallback :: Maybe (Notification -> IO ())
 }
 
-mkPaperBroker :: BoundedChan Tick -> Decimal -> [String] -> IO Broker
+mkPaperBroker :: BoundedChan Tick -> Decimal -> [T.Text] -> IO BrokerInterface
 mkPaperBroker tickChan startCash accounts = do
   state <- newIORef PaperBrokerState {
     pbTid = Nothing,
@@ -43,20 +45,17 @@ mkPaperBroker tickChan startCash accounts = do
     orders = M.empty,
     cash = startCash,
     orderIdCounter = 1,
-    tradeCallback = Nothing,
-    orderCallback = Nothing }
+    notificationCallback = Nothing }
 
   tid <- forkIO $ brokerThread state
   atomicModifyIORef' state (\s -> (s { pbTid = Just tid }, ()) )
 
-  return Broker {
+  return BrokerInterface {
     accounts = accounts,
-    setTradeCallback = pbSetTradeCallback state,
-    setOrderCallback = pbSetOrderCallback state,
+    setNotificationCallback = pbSetNotificationCallback state,
     submitOrder = pbSubmitOrder state,
     cancelOrder = pbCancelOrder state,
-    getOrder = pbGetOrder state,
-    destroyBroker = pbDestroyBroker state }
+    stopBroker = pbDestroyBroker state }
 
 brokerThread :: IORef PaperBrokerState -> IO ()
 brokerThread state = do
@@ -73,13 +72,11 @@ nextOrderId state = do
   modifyIORef state (\s -> s { orderIdCounter = id + 1 } )
   return id
 
-pbSetTradeCallback :: IORef PaperBrokerState -> Maybe (Trade -> IO ()) -> IO()
-pbSetTradeCallback state callback = modifyIORef state (\s -> s { tradeCallback = callback } )
+pbSetNotificationCallback :: IORef PaperBrokerState -> Maybe (Notification -> IO ()) -> IO()
+pbSetNotificationCallback state callback = modifyIORef state (\s -> s { notificationCallback = callback } )
 
-pbSetOrderCallback :: IORef PaperBrokerState -> Maybe (Order -> IO ()) -> IO()
-pbSetOrderCallback state callback = modifyIORef state (\s -> s { orderCallback = callback } )
 
-pbSubmitOrder :: IORef PaperBrokerState -> Order -> IO OrderId
+pbSubmitOrder :: IORef PaperBrokerState -> Order -> IO ()
 pbSubmitOrder state order = do
   curState <- readIORef state
   case orderPrice order of
@@ -91,18 +88,15 @@ pbSubmitOrder state order = do
   where
     executeMarketOrder state order = do
       tm <- tickMap <$> readIORef state
-      oid <- nextOrderId state
       case M.lookup key tm of
-        Nothing -> let newOrder = order { orderState = Error "Unable to execute order: no bid/ask", orderId = oid } in
-          atomicModifyIORef' state (\s -> (s { orders = M.insert oid newOrder $ orders s }, ()) )
+        Nothing -> let newOrder = order { orderState = OrderError } in
+          atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()) )
 
-        Just tick -> let newOrder = order { orderState = Executed, orderId = oid }
+        Just tick -> let newOrder = order { orderState = Executed }
                          tradeVolume = (realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick) in do
-          atomicModifyIORef' state (\s -> (s { orders = M.insert oid newOrder $ orders s , cash = cash s - tradeVolume}, ()) )
+          atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()) )
           ts <- getCurrentTime
-          maybeCall tradeCallback state $ mkTrade tick order ts
-
-      return oid
+          maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
 
     submitLimitOrder = undefined
     submitStopOrder = undefined
@@ -126,13 +120,14 @@ pbSubmitOrder state order = do
       tradeQuantity = orderQuantity order,
       tradeVolume = realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick,
       tradeVolumeCurrency = "TEST",
+      tradeOperation = orderOperation order,
       tradeAccount = orderAccountId order,
       tradeSecurity = orderSecurity order,
       tradeTimestamp = timestamp,
       tradeSignalId = orderSignalId order }
 
 
-pbCancelOrder :: IORef PaperBrokerState -> OrderId -> IO ()
+pbCancelOrder :: IORef PaperBrokerState -> OrderId -> IO Bool
 pbCancelOrder state order = undefined
 
 pbDestroyBroker :: IORef PaperBrokerState -> IO ()

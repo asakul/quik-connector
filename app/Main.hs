@@ -1,20 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Lib
 import QuoteSource.DataImport
 import Control.Concurrent hiding (readChan)
 import Control.Monad
+import Control.Exception
 import Control.Monad.IO.Class
 import Data.IORef
 import Graphics.UI.Gtk hiding (Action, backspace)
 import Control.Concurrent.BoundedChan
-import Data.ATrade
+import ATrade.Types
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
-import QuoteSource.Server
+import ATrade.QuoteSource.Server
 
-import Broker
+import ATrade.Broker.Server
+import ATrade.Broker.Protocol
 import Broker.PaperBroker
 
 import System.Log.Logger
@@ -75,14 +76,16 @@ parseConfig = withObject "object" $ \obj -> do
         tableName = tn,
         tableParams = params }
 
-forkBoundedChan :: Int -> Int -> BoundedChan a -> IO (ThreadId, [BoundedChan a])
-forkBoundedChan chans size source = do
-  sinks <- replicateM chans (newBoundedChan size)
+forkBoundedChan :: Int -> BoundedChan a -> IO (ThreadId, BoundedChan a, BoundedChan (Maybe a))
+forkBoundedChan size source = do
+  sink <- newBoundedChan size
+  sinkMaybe <- newBoundedChan size
   tid <- forkIO $ forever $ do
     v <- readChan source
-    mapM_ (`tryWriteChan` v) sinks
+    tryWriteChan sink v
+    tryWriteChan sinkMaybe (Just v)
 
-  return (tid, sinks)
+  return (tid, sink, sinkMaybe)
 
 
 main :: IO ()
@@ -95,20 +98,19 @@ main = do
   infoM "main" "Starting data import server"
   dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
 
-  (forkId, [c1, c2]) <- forkBoundedChan 2 1000 chan
+  (forkId, c1, c2) <- forkBoundedChan 1000 chan
 
-  broker <- mkPaperBroker c2 1000000 ["demo"]
-  withContext (\ctx -> do
-    qsServer <- startQuoteSourceServer c1 ctx (quotesourceEndpoint config)
-
-    void initGUI
-    window <- windowNew
-    window `on` deleteEvent $ do
-      liftIO mainQuit
-      return False
-    widgetShowAll window
-    mainGUI
-    stopQuoteSourceServer qsServer
-    infoM "main" "Main thread done")
+  broker <- mkPaperBroker c1 1000000 ["demo"]
+  withContext (\ctx ->
+    bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer ->
+      bracket (startBrokerServer [broker] ctx (T.pack $ brokerserverEndpoint config)) stopBrokerServer (\broServer -> do
+        void initGUI
+        window <- windowNew
+        window `on` deleteEvent $ do
+          liftIO mainQuit
+          return False
+        widgetShowAll window
+        mainGUI
+        infoM "main" "Main thread done")))
   killThread forkId
 

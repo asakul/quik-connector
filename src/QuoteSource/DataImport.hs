@@ -8,7 +8,7 @@ module QuoteSource.DataImport
 
 import Control.Concurrent.BoundedChan
 import Control.Monad.State.Strict
-import Data.ATrade
+import ATrade.Types
 import Data.IORef
 import Data.Time.Clock
 import QuoteSource.TableParser
