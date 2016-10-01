@@ -5,13 +5,14 @@ module QuoteSource.TableParsers.AllParamsTableParser (
   mkAllParamsTableParser
 ) where
 
-import qualified Data.Map.Lazy as M
+import qualified Data.Map.Strict as M
 import QuoteSource.TableParser
 import ATrade.Types
 import System.Win32.XlParser
 import Data.Tuple
 import Data.Decimal
 import Control.Monad.State.Strict
+import Control.DeepSeq
 import Data.Time.Clock
 import Data.Maybe
 import Data.DateTime
@@ -82,8 +83,8 @@ safeAt list index = if index < 0 || index >= length list
 
 parseWithSchema :: TableSchema -> (Int, Int, [XlData]) -> State AllParamsTableParser [Tick]
 parseWithSchema sch (width, height, cells) = do
-  ticks <- mapM parseRow $ groupByN width $ cells
-  return $ concat ticks
+  ticks <- mapM parseRow $ groupByN width cells
+  return . concat $ ticks
   where
     parseRow :: [XlData] -> State AllParamsTableParser [Tick]
     parseRow row = case (getClassCode row, getTicker row) of
@@ -102,10 +103,10 @@ parseWithSchema sch (width, height, cells) = do
           Just (XlDouble value) -> do
             ts <- gets timestampHint
             return $ Just Tick {
-              security = securityName classCode ticker,
+              security = force $ securityName classCode ticker,
               datatype = columnToDataType columnType,
               timestamp = ts,
-              value = realFracToDecimal 10 value,
+              value = force $ realFracToDecimal 10 value,
               volume = 0 }
           _ -> return Nothing
 
@@ -119,10 +120,10 @@ parseWithSchema sch (width, height, cells) = do
               then do
                 ts <- gets timestampHint
                 return $ Just Tick {
-                  security = securityName classCode ticker,
+                  security = force $ securityName classCode ticker,
                   datatype = Price,
                   timestamp = ts,
-                  value = realFracToDecimal 10 value,
+                  value = force $ realFracToDecimal 10 value,
                   volume = tickVolume}
               else
                 return Nothing
@@ -137,10 +138,10 @@ parseWithSchema sch (width, height, cells) = do
           let intVolume = round volume
           case M.lookup secname oldVolumes of
             Nothing -> do
-              modify (\s -> s { volumes = M.insert secname intVolume oldVolumes } )
+              modify (\s -> s { volumes = oldVolumes `seq` M.insert secname intVolume oldVolumes } )
               return 1
             Just oldVolume -> do
-              modify (\s -> s { volumes = M.insert secname intVolume oldVolumes } )
+              modify (\s -> s { volumes = oldVolumes `seq` M.insert secname intVolume oldVolumes } )
               return $ if intVolume > oldVolume
                 then intVolume - oldVolume
                 else if intVolume < oldVolume

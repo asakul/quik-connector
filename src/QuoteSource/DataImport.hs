@@ -31,7 +31,7 @@ ddeCallback state topic table = do
       timeHint <- getCurrentTime
       let stateWithTimeHint = giveTimestampHint myParser timeHint
       let (ticks, newState) = runState (parseXlTable table) stateWithTimeHint
-      modifyIORef (parsers state) (M.insert topic (MkTableParser newState))
+      modifyIORef' (parsers state) (\s -> newState `seq` s `seq` M.insert topic (MkTableParser newState) s)
       writeList2Chan (tickChannel state) ticks
       return True
     _ -> return False

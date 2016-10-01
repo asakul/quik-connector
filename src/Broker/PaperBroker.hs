@@ -1,16 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Broker.PaperBroker (
   PaperBrokerState,
   mkPaperBroker
 ) where
 
+import Control.DeepSeq
 import Data.Hashable
 import Data.Bits
 import Control.Concurrent.BoundedChan
 import ATrade.Types
 import Data.IORef
-import qualified Data.HashMap as M
+import qualified Data.HashMap.Strict as M
 import qualified Data.Text as T
 import ATrade.Broker.Protocol
 import ATrade.Broker.Server
@@ -20,7 +22,7 @@ import Control.Monad
 import Control.Concurrent hiding (readChan)
 import System.Log.Logger
 
-data TickMapKey = TickMapKey T.Text DataType
+data TickMapKey = TickMapKey !T.Text !DataType
   deriving (Show, Eq, Ord)
 
 instance Hashable TickMapKey where
@@ -29,9 +31,9 @@ instance Hashable TickMapKey where
 data PaperBrokerState = PaperBrokerState {
   pbTid :: Maybe ThreadId,
   tickChannel :: BoundedChan Tick,
-  tickMap :: M.Map TickMapKey Tick,
-  orders :: M.Map OrderId Order,
-  cash :: Decimal,
+  tickMap :: M.HashMap TickMapKey Tick,
+  orders :: M.HashMap OrderId Order,
+  cash :: ! Decimal,
   orderIdCounter :: OrderId,
   notificationCallback :: Maybe (Notification -> IO ())
 }
@@ -62,9 +64,9 @@ brokerThread state = do
   chan <- tickChannel <$> readIORef state
   forever $ do
     tick <- readChan chan
-    atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick (tickMap s) }, ()) )
+    atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()) )
   where
-    makeKey tick = TickMapKey (security tick) (datatype tick)
+    makeKey !tick = TickMapKey (security $! tick) (datatype tick)
 
 nextOrderId :: IORef PaperBrokerState -> IO OrderId
 nextOrderId state = do
