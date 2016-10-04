@@ -31,6 +31,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Text as T
 
+import Control.Monad.Trans.Except
+import Broker.QuikBroker.Trans2QuikApi
+
 data TableConfig = TableConfig {
   parserId :: String,
   tableName :: String,
@@ -93,6 +96,12 @@ main = do
   updateGlobalLogger rootLoggerName (setLevel DEBUG)
   infoM "main" "Loading config"
   config <- readConfig "quik-connector.config.json"
+
+  api <- runExceptT $ loadQuikApi "C:\\Program Files\\Info\\Trans2Quik.dll"
+  case api of
+    Left err -> print err
+    Right a -> infoM "main" "Quik API DLL loaded"
+
   infoM "main" "Config loaded"
   chan <- newBoundedChan 1000
   infoM "main" "Starting data import server"
@@ -102,7 +111,7 @@ main = do
 
   broker <- mkPaperBroker c1 1000000 ["demo"]
   withContext (\ctx ->
-    bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer ->
+    bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
       bracket (startBrokerServer [broker] ctx (T.pack $ brokerserverEndpoint config)) stopBrokerServer (\broServer -> do
         void initGUI
         window <- windowNew
@@ -110,7 +119,9 @@ main = do
           liftIO mainQuit
           return False
         widgetShowAll window
-        mainGUI
-        infoM "main" "Main thread done")))
+        mainGUI)
+      infoM "main" "BRS down")
+    )
   killThread forkId
+  infoM "main" "Main thread done"
 
