@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE Strict #-}
 
 module Broker.PaperBroker (
   PaperBrokerState,
@@ -80,6 +81,7 @@ pbSetNotificationCallback state callback = modifyIORef state (\s -> s { notifica
 
 pbSubmitOrder :: IORef PaperBrokerState -> Order -> IO ()
 pbSubmitOrder state order = do
+  infoM "PaperBroker" $ "Submitted order: " ++ show order
   curState <- readIORef state
   case orderPrice order of
     Market -> executeMarketOrder state order
@@ -100,9 +102,9 @@ pbSubmitOrder state order = do
           ts <- getCurrentTime
           maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
 
-    submitLimitOrder = undefined
-    submitStopOrder = undefined
-    submitStopMarketOrder = undefined
+    submitLimitOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
+    submitStopOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
+    submitStopMarketOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
 
     orderDatatype order = case orderOperation order of
       Buy -> BestOffer
