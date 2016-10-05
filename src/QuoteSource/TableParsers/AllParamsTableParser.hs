@@ -33,13 +33,13 @@ data TableColumn = CUnknown
 columnCodes = M.fromList [
   ("CLASS_CODE", CClassCode),
   ("CODE", CTicker),
-  ("bid", CBestBid),
-  ("offer", CBestAsk),
-  ("last", CPrice),
-  ("numcontracts", COpenInterest),
-  ("biddepth", CTotalDemand),
-  ("offerdepth", CTotalSupply),
-  ("voltoday", CVolume)]
+  ("BID", CBestBid),
+  ("OFFER", CBestAsk),
+  ("LAST", CPrice),
+  ("NUMCONTRACTS", COpenInterest),
+  ("BIDDEPTHT", CTotalDemand),
+  ("OFFERDEPTHT", CTotalSupply),
+  ("VOLTODAY", CVolume)]
 
 columnToDataType :: TableColumn -> DataType
 columnToDataType x 
