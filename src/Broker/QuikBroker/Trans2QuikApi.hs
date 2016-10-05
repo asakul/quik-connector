@@ -14,7 +14,25 @@ import Control.Error.Util
 import Control.Monad.IO.Class
 import System.Win32.DLL
 import System.Win32.Types
+import Control.Concurrent
+import Data.IORef
 import qualified Data.Text as T
+
+EcSuccess = 0
+EcFailed = 1
+EcQuikTerminalNotFound = 2
+EcDllVersionNotSupported = 3
+EcAlreadyConnectedToQuik = 4
+EcWrongSyntax = 5
+EcQuikNotConnected = 6
+EcDllNotConnected = 7
+EcQuikConnected = 8
+EcQuikDisconnected = 9
+EcDllConnected = 10
+EcDllDisconnected = 11
+EcMemoryAllocationError = 12
+EcWrongConnectionHandle = 13
+EcWrongInputParams = 14
 
 type ConnectF = LPCSTR -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
 foreign import ccall "dynamic"
@@ -44,7 +62,7 @@ type ConnectionStatusCallback = LONG -> LONG -> LPSTR -> IO ()
 foreign import ccall "wrapper"
   mkConnectionStatusCallback :: ConnectionStatusCallback -> IO (FunPtr ConnectionStatusCallback)
 
-type SetConnectionStatusCallbackF = FunPtr ConnectionStatusCallback -> Ptr LONG -> LPSTR -> DWORD -> LONG
+type SetConnectionStatusCallbackF = FunPtr ConnectionStatusCallback -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
 foreign import ccall "dynamic"
   mkSetConnectionStatusCallbackFun :: FunPtr SetConnectionStatusCallbackF -> SetConnectionStatusCallbackF
 
@@ -52,7 +70,7 @@ type TransactionsReplyCallback = LONG -> LONG -> LONG -> DWORD -> CDouble -> LPS
 foreign import ccall "wrapper"
   mkTransactionsReplyCallback :: TransactionsReplyCallback -> IO (FunPtr TransactionsReplyCallback)
 
-type SetTransactionsReplyCallbackF = FunPtr TransactionsReplyCallback -> Ptr LONG -> LPSTR -> DWORD -> LONG
+type SetTransactionsReplyCallbackF = FunPtr TransactionsReplyCallback -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
 foreign import ccall "dynamic"
   mkSetTransactionsReplyCallbackFun :: FunPtr SetTransactionsReplyCallbackF -> SetTransactionsReplyCallbackF
 
@@ -264,11 +282,6 @@ data Trans2QuikApi = Trans2QuikApi {
   unsubscribeOrders :: UnsubscribeOrdersF,
   unsubscribeTrades :: UnsubscribeTradesF,
 
-  connectionStatusCallback :: Maybe (FunPtr ConnectionStatusCallback),
-  transactionReplyCallback :: Maybe (FunPtr TransactionsReplyCallback),
-  orderStatusCallback :: Maybe (FunPtr OrderStatusCallback),
-  tradeStatusCallback :: Maybe (FunPtr TradeStatusCallback),
-
   orderQty :: OrderQtyF,
   orderDate :: OrderDateF,
   orderTime :: OrderTimeF,
@@ -307,6 +320,58 @@ data Trans2QuikApi = Trans2QuikApi {
 
   dllHandle :: HMODULE
 }
+
+data Quik = Quik {
+  quikApi :: Trans2QuikApi,
+
+  connectionCallback :: FunPtr ConnectionStatusCallback,
+  transactionCallback :: FunPtr TransactionsReplyCallback,
+  orderCallback :: FunPtr OrderStatusCallback,
+  tradeCallback :: FunPtr TradeStatusCallback,
+
+  connected :: Bool,
+  watchdogTid :: ThreadId
+}
+
+mkQuik :: FilePath -> FilePath -> ConnectionStatusCallback -> TransactionsReplyCallback -> OrderStatusCallback -> TradeStatusCallback -> ExceptT T.Text IO (IORef Quik)
+mkQuik dllpath quikpath conncb transcb orcb tradecb = do
+  api <- loadQuikApi dllpath
+
+  conncb' <- liftIO (mkConnectionStatusCallback conncb)
+  transcb' <- liftIO (mkTransactionsReplyCallback transcb)
+  orcb' <- liftIO (mkOrderStatusCallback orcb)
+  tradecb' <- liftIO (mkTradeStatusCallback tradecb)
+
+  myTid <- liftIO myThreadId
+  state <- liftIO $ newIORef Quik { quikApi = api,
+    connectionCallback = conncb',
+    transactionCallback = transcb',
+    orderCallback = orcb',
+    tradeCallback = tradecb',
+    connected = False,
+    watchdogTid = myTid }
+
+  tid <- liftIO (forkIO $ watchdog quikpath state)
+  liftIO $ atomicModifyIORef' (\s -> s { watchdogTid = tid })
+  return state
+
+watchdog :: FilePath -> IORef Quik -> IO ()
+watchdog quikpath state = do
+  api <- quikApi <$> readIORef state
+  conncb <- connectionCallback <$> readIORef state
+
+  alloca (\errorCode ->
+    allocaBytes 1024 (\errorMsg -> do
+      err <- setConnectionStatusCallback api $ conncb errorCode errorMsg 1024
+      if err /= EcSuccess
+        then warningM "Quik.Watchdog" $ "Error: " ++ show err
+        else forever $ do
+          conn <- connected <$> readIORef state
+          unless conn $
+            withCString quikpath (\path -> do
+              err <- connect api $ path errorCode errorMsg 1024
+              when (err /= EcSuccess) $ warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err)
+          threadDelay 5000000))
 
 loadQuikApi :: FilePath -> ExceptT T.Text IO Trans2QuikApi
 loadQuikApi path = do
@@ -431,4 +496,5 @@ loadQuikApi path = do
       return $ castPtrToFunPtr p
 
     getProcAddress' dll proc = withCAString proc (c_GetProcAddress dll . castPtr)
+
 
