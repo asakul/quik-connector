@@ -44,7 +44,10 @@ data TableConfig = TableConfig {
 data Config = Config {
   quotesourceEndpoint :: String,
   brokerserverEndpoint :: String,
-  tables :: [TableConfig]
+  tables :: [TableConfig],
+  quikPath :: String,
+  dllPath :: String,
+  quikAccounts :: [T.Text]
 } deriving (Show)
 
 readConfig :: String -> IO Config
@@ -61,9 +64,15 @@ parseConfig = withObject "object" $ \obj -> do
   rt <- case HM.lookup "tables" obj of
     Just v -> parseTables v
     Nothing -> fail "Expected tables array"
+  qp <- obj .: "quik-path"
+  dp <- obj .: "dll-path"
+  accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
     brokerserverEndpoint = bse,
-    tables = rt }
+    tables = rt,
+    quikPath = qp,
+    dllPath = dp,
+    quikAccounts = fmap T.pack accs }
   where
     parseTables :: Value -> Parser [TableConfig]
     parseTables = withArray "array" $ \arr -> mapM parseTableConfig (V.toList arr)
@@ -106,10 +115,10 @@ main = do
   (forkId, c1, c2) <- forkBoundedChan 1000 chan
 
   broker <- mkPaperBroker c1 1000000 ["demo"]
-  eitherBrokerQ <- runExceptT $ mkQuikBroker "C:\\Program Files (x86)\\Info\\Trans2Quik.dll" "C:\\Program Files (x86)\\Info" ["<ACCOUNT>"]
+  eitherBrokerQ <- runExceptT $ mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config)
   case eitherBrokerQ of
     Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
-    Right brokerQ -> 
+    Right brokerQ ->
       withContext (\ctx ->
         bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
           bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config)) stopBrokerServer (\broServer -> do
