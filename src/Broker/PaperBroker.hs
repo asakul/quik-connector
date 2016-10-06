@@ -35,7 +35,6 @@ data PaperBrokerState = PaperBrokerState {
   tickMap :: M.HashMap TickMapKey Tick,
   orders :: M.HashMap OrderId Order,
   cash :: ! Decimal,
-  orderIdCounter :: OrderId,
   notificationCallback :: Maybe (Notification -> IO ())
 }
 
@@ -47,7 +46,6 @@ mkPaperBroker tickChan startCash accounts = do
     tickMap = M.empty,
     orders = M.empty,
     cash = startCash,
-    orderIdCounter = 1,
     notificationCallback = Nothing }
 
   tid <- forkIO $ brokerThread state
@@ -68,12 +66,6 @@ brokerThread state = do
     atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()) )
   where
     makeKey !tick = TickMapKey (security $! tick) (datatype tick)
-
-nextOrderId :: IORef PaperBrokerState -> IO OrderId
-nextOrderId state = do
-  id <- orderIdCounter <$> readIORef state
-  modifyIORef state (\s -> s { orderIdCounter = id + 1 } )
-  return id
 
 pbSetNotificationCallback :: IORef PaperBrokerState -> Maybe (Notification -> IO ()) -> IO()
 pbSetNotificationCallback state callback = modifyIORef state (\s -> s { notificationCallback = callback } )
@@ -101,6 +93,7 @@ pbSubmitOrder state order = do
           atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()) )
           ts <- getCurrentTime
           maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
+          maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
 
     submitLimitOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
     submitStopOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order

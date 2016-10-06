@@ -17,6 +17,7 @@ import ATrade.QuoteSource.Server
 import ATrade.Broker.Server
 import ATrade.Broker.Protocol
 import Broker.PaperBroker
+import Broker.QuikBroker
 
 import System.Log.Logger
 import System.Log.Handler.Simple
@@ -97,11 +98,6 @@ main = do
   infoM "main" "Loading config"
   config <- readConfig "quik-connector.config.json"
 
-  api <- runExceptT $ loadQuikApi "C:\\Program Files\\Info\\Trans2Quik.dll"
-  case api of
-    Left err -> print err
-    Right a -> infoM "main" "Quik API DLL loaded"
-
   infoM "main" "Config loaded"
   chan <- newBoundedChan 1000
   infoM "main" "Starting data import server"
@@ -110,18 +106,22 @@ main = do
   (forkId, c1, c2) <- forkBoundedChan 1000 chan
 
   broker <- mkPaperBroker c1 1000000 ["demo"]
-  withContext (\ctx ->
-    bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
-      bracket (startBrokerServer [broker] ctx (T.pack $ brokerserverEndpoint config)) stopBrokerServer (\broServer -> do
-        void initGUI
-        window <- windowNew
-        window `on` deleteEvent $ do
-          liftIO mainQuit
-          return False
-        widgetShowAll window
-        mainGUI)
-      infoM "main" "BRS down")
-    )
+  eitherBrokerQ <- runExceptT $ mkQuikBroker "C:\\Program Files (x86)\\Info\\Trans2Quik.dll" "C:\\Program Files (x86)\\Info" ["<ACCOUNT>"]
+  case eitherBrokerQ of
+    Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
+    Right brokerQ -> 
+      withContext (\ctx ->
+        bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
+          bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config)) stopBrokerServer (\broServer -> do
+            void initGUI
+            window <- windowNew
+            window `on` deleteEvent $ do
+              liftIO mainQuit
+              return False
+            widgetShowAll window
+            mainGUI)
+          infoM "main" "BRS down")
+        )
   killThread forkId
   infoM "main" "Main thread done"
 

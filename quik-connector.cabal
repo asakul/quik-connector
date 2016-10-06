@@ -19,6 +19,7 @@ library
                      , QuoteSource.TableParser
                      , QuoteSource.TableParsers.AllParamsTableParser
                      , Broker.PaperBroker
+                     , Broker.QuikBroker
                      , Broker.QuikBroker.Trans2QuikApi
   ghc-options:         -Wincomplete-patterns
   build-depends:       base >= 4.7 && < 5
@@ -47,6 +48,9 @@ library
                      , libatrade
                      , deepseq
                      , errors
+                     , split
+                     , bimap
+                     , safe
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser

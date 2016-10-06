@@ -2,13 +2,20 @@
 
 module Broker.QuikBroker.Trans2QuikApi (
   Trans2QuikApi(..),
-  loadQuikApi
+  loadQuikApi,
+  Quik(..),
+  setCallbacks,
+  mkQuik,
+  QuikOrder(..),
+  QuikTrade(..),
+  quikSendTransaction
 ) where
 
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
 import Foreign.Marshal.Array
+import Control.Monad
 import Control.Monad.Trans.Except
 import Control.Error.Util
 import Control.Monad.IO.Class
@@ -16,255 +23,263 @@ import System.Win32.DLL
 import System.Win32.Types
 import Control.Concurrent
 import Data.IORef
+import Data.Time.Clock
+import Data.Time.Calendar
+import Data.Ratio
+import qualified Data.Set as S
 import qualified Data.Text as T
+import System.Log.Logger
 
-EcSuccess = 0
-EcFailed = 1
-EcQuikTerminalNotFound = 2
-EcDllVersionNotSupported = 3
-EcAlreadyConnectedToQuik = 4
-EcWrongSyntax = 5
-EcQuikNotConnected = 6
-EcDllNotConnected = 7
-EcQuikConnected = 8
-EcQuikDisconnected = 9
-EcDllConnected = 10
-EcDllDisconnected = 11
-EcMemoryAllocationError = 12
-EcWrongConnectionHandle = 13
-EcWrongInputParams = 14
+ecSuccess = 0
+ecFailed = 1
+ecQuikTerminalNotFound = 2
+ecDllVersionNotSupported = 3
+ecAlreadyConnectedToQuik = 4
+ecWrongSyntax = 5
+ecQuikNotConnected = 6
+ecDllNotConnected = 7
+ecQuikConnected = 8
+ecQuikDisconnected = 9
+ecDllConnected = 10
+ecDllDisconnected = 11
+ecMemoryAllocationError = 12
+ecWrongConnectionHandle = 13
+ecWrongInputParams = 14
 
 type ConnectF = LPCSTR -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkConnectFun :: FunPtr ConnectF -> ConnectF
 
 type DisconnectF = Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkDisconnectFun :: FunPtr DisconnectF -> DisconnectF
 
 type IsQuikConnectedF = Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkIsQuikConnectedFun :: FunPtr IsQuikConnectedF -> IsQuikConnectedF
 
 type IsDllConnectedF = Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkIsDllConnectedFun :: FunPtr IsDllConnectedF -> IsDllConnectedF
 
 type SendSyncTransactionF = LPSTR -> Ptr LONG -> Ptr LONG -> Ptr CDouble -> LPSTR -> DWORD -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkSendSyncTransactionFun :: FunPtr SendSyncTransactionF -> SendSyncTransactionF
 
 type SendAsyncTransactionF = LPSTR -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkSendAsyncTransactionFun :: FunPtr SendAsyncTransactionF -> SendAsyncTransactionF
 
 type ConnectionStatusCallback = LONG -> LONG -> LPSTR -> IO ()
-foreign import ccall "wrapper"
+foreign import stdcall "wrapper"
   mkConnectionStatusCallback :: ConnectionStatusCallback -> IO (FunPtr ConnectionStatusCallback)
 
 type SetConnectionStatusCallbackF = FunPtr ConnectionStatusCallback -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkSetConnectionStatusCallbackFun :: FunPtr SetConnectionStatusCallbackF -> SetConnectionStatusCallbackF
 
-type TransactionsReplyCallback = LONG -> LONG -> LONG -> DWORD -> CDouble -> LPSTR -> IO ()
-foreign import ccall "wrapper"
+type TransactionsReplyCallback = LONG -> LONG -> LONG -> DWORD -> CLLong -> LPSTR -> CIntPtr -> IO ()
+foreign import stdcall "wrapper"
   mkTransactionsReplyCallback :: TransactionsReplyCallback -> IO (FunPtr TransactionsReplyCallback)
 
 type SetTransactionsReplyCallbackF = FunPtr TransactionsReplyCallback -> Ptr LONG -> LPSTR -> DWORD -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkSetTransactionsReplyCallbackFun :: FunPtr SetTransactionsReplyCallbackF -> SetTransactionsReplyCallbackF
 
-type OrderStatusCallback = LONG -> DWORD -> CDouble -> LPSTR -> LPSTR -> CDouble -> LONG -> CDouble -> LONG -> LONG -> LONG -> IO ()
-foreign import ccall "wrapper"
+type OrderStatusCallback = LONG -> DWORD -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> LONG -> CIntPtr -> IO ()
+foreign import stdcall "wrapper"
   mkOrderStatusCallback :: OrderStatusCallback -> IO (FunPtr OrderStatusCallback)
 
-type TradeStatusCallback = LONG -> CDouble -> CDouble -> LPSTR -> LPSTR -> CDouble -> LONG -> CDouble -> LONG -> LONG -> IO ()
-foreign import ccall "wrapper"
+type TradeStatusCallback = LONG -> CLLong -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> CIntPtr -> IO ()
+foreign import stdcall "wrapper"
   mkTradeStatusCallback :: TradeStatusCallback -> IO (FunPtr TradeStatusCallback)
 
 type SubscribeOrdersF = LPSTR -> LPSTR -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkSubscribeOrdersFun :: FunPtr SubscribeOrdersF -> SubscribeOrdersF
 
 type SubscribeTradesF = LPSTR -> LPSTR -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkSubscribeTradesFun :: FunPtr SubscribeTradesF -> SubscribeTradesF
 
 type StartOrdersF = FunPtr OrderStatusCallback -> IO ()
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkStartOrdersFun :: FunPtr StartOrdersF -> StartOrdersF
 
 type StartTradesF = FunPtr TradeStatusCallback -> IO ()
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkStartTradesFun :: FunPtr StartTradesF -> StartTradesF
 
 type UnsubscribeOrdersF = IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkUnsubscribeOrdersFun :: FunPtr UnsubscribeOrdersF -> UnsubscribeOrdersF
 
 type UnsubscribeTradesF = IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkUnsubscribeTradesFun :: FunPtr UnsubscribeTradesF -> UnsubscribeTradesF
 
 -- Order requests
 
 type OrderQtyF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderQtyFun :: FunPtr OrderQtyF -> OrderQtyF
 
 type OrderDateF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderDateFun :: FunPtr OrderDateF -> OrderDateF
 
 type OrderTimeF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderTimeFun :: FunPtr OrderTimeF -> OrderTimeF
 
 type OrderActivationTimeF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderActivationTimeFun :: FunPtr OrderActivationTimeF -> OrderActivationTimeF
 
 type OrderWithdrawTimeF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderWithdrawTimeFun :: FunPtr OrderWithdrawTimeF -> OrderWithdrawTimeF
 
 type OrderExpiryF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderExpiryFun :: FunPtr OrderExpiryF -> OrderExpiryF
 
 type OrderAccruedIntF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderAccruedIntFun :: FunPtr OrderAccruedIntF -> OrderAccruedIntF
 
 type OrderYieldF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderYieldFun :: FunPtr OrderYieldF -> OrderYieldF
 
 type OrderUserIdF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderUserIdFun :: FunPtr OrderUserIdF -> OrderUserIdF
 
 type OrderUidF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderUidFun :: FunPtr OrderUidF -> OrderUidF
 
 type OrderAccountF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderAccountFun :: FunPtr OrderAccountF -> OrderAccountF
 
 type OrderBrokerRefF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderBrokerRefFun :: FunPtr OrderBrokerRefF -> OrderBrokerRefF
 
 type OrderClientCodeF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderClientCodeFun :: FunPtr OrderClientCodeF -> OrderClientCodeF
 
 type OrderFirmIdF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderFirmIdFun :: FunPtr OrderFirmIdF -> OrderFirmIdF
 
 type OrderVisibleQtyF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderVisibleQtyFun :: FunPtr OrderVisibleQtyF -> OrderVisibleQtyF
 
 type OrderPeriodF = LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderPeriodFun :: FunPtr OrderPeriodF -> OrderPeriodF
 
 type OrderDateTimeF = LONG -> LONG -> IO LONG
-foreign import ccall "dynamic"
+foreign import stdcall "dynamic"
   mkOrderDateTimeFun :: FunPtr OrderDateTimeF -> OrderDateTimeF
 
 -- Trade requests
 
-type TradeDateF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradeDateF = CIntPtr -> IO LONG
+foreign import stdcall "dynamic"
   mkTradeDateFun :: FunPtr TradeDateF -> TradeDateF
 
-type TradeSettleDateF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradeSettleDateF = CIntPtr -> IO LONG
+foreign import stdcall "dynamic"
   mkTradeSettleDateFun :: FunPtr TradeSettleDateF -> TradeSettleDateF
 
-type TradeTimeF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradeTimeF = CIntPtr -> IO LONG
+foreign import stdcall "dynamic"
   mkTradeTimeFun :: FunPtr TradeTimeF -> TradeTimeF
 
-type TradeIsMarginalF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradeIsMarginalF = CIntPtr -> IO LONG
+foreign import stdcall "dynamic"
   mkTradeIsMarginalFun :: FunPtr TradeIsMarginalF -> TradeIsMarginalF
 
-type TradeCurrencyF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeCurrencyF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeCurrencyFun :: FunPtr TradeCurrencyF -> TradeCurrencyF
 
-type TradeSettleCurrencyF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeSettleCurrencyF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeSettleCurrencyFun :: FunPtr TradeSettleCurrencyF -> TradeSettleCurrencyF
 
-type TradeSettleCodeF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeSettleCodeF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeSettleCodeFun :: FunPtr TradeSettleCodeF -> TradeSettleCodeF
 
-type TradeAccruedIntF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+type TradeAccruedIntF = CIntPtr -> IO CDouble
+foreign import stdcall "dynamic"
   mkTradeAccruedIntFun :: FunPtr TradeAccruedIntF -> TradeAccruedIntF
 
-type TradeYieldF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+type TradeYieldF = CIntPtr -> IO CDouble
+foreign import stdcall "dynamic"
   mkTradeYieldFun :: FunPtr TradeYieldF -> TradeYieldF
 
-type TradeUserIdF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeUserIdF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeUserIdFun :: FunPtr TradeUserIdF -> TradeUserIdF
 
-type TradeAccountF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeAccountF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeAccountFun :: FunPtr TradeAccountF -> TradeAccountF
 
-type TradeBrokerRefF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeBrokerRefF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeBrokerRefFun :: FunPtr TradeBrokerRefF -> TradeBrokerRefF
 
-type TradeClientCodeF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeClientCodeF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeClientCodeFun :: FunPtr TradeClientCodeF -> TradeClientCodeF
 
-type TradeFirmIdF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradeFirmIdF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradeFirmIdFun :: FunPtr TradeFirmIdF -> TradeFirmIdF
 
-type TradePartnerFirmIdF = LONG -> IO LPSTR
-foreign import ccall "dynamic"
+type TradePartnerFirmIdF = CIntPtr -> IO LPSTR
+foreign import stdcall "dynamic"
   mkTradePartnerFirmIdFun :: FunPtr TradePartnerFirmIdF -> TradePartnerFirmIdF
 
-type TradeTsCommissionF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+type TradeTsCommissionF = CIntPtr -> IO CDouble
+foreign import stdcall "dynamic"
   mkTradeTsCommissionFun :: FunPtr TradeTsCommissionF -> TradeTsCommissionF
 
-type TradeClearingCenterCommissionF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+type TradeClearingCenterCommissionF = CIntPtr -> IO CDouble
+foreign import stdcall "dynamic"
   mkTradeClearingCenterCommissionFun :: FunPtr TradeClearingCenterCommissionF -> TradeClearingCenterCommissionF
 
-type TradeExchangeCommissionF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+type TradeExchangeCommissionF = CIntPtr -> IO CDouble
+foreign import stdcall "dynamic"
   mkTradeExchangeCommissionFun :: FunPtr TradeExchangeCommissionF -> TradeExchangeCommissionF
 
-type TradeTradingSystemCommissionF = LONG -> IO CDouble
-foreign import ccall "dynamic"
+type TradeTradingSystemCommissionF = CIntPtr -> IO CDouble
+foreign import stdcall "dynamic"
   mkTradeTradingSystemCommissionFun :: FunPtr TradeTradingSystemCommissionF -> TradeTradingSystemCommissionF
 
-type TradePeriodF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradePeriodF = CIntPtr -> IO LONG
+foreign import stdcall "dynamic"
   mkTradePeriodFun :: FunPtr TradePeriodF -> TradePeriodF
 
-type TradeDateTimeF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradeDateTimeF = CIntPtr -> LONG -> IO LONG
+foreign import stdcall "dynamic"
   mkTradeDateTimeFun :: FunPtr TradeDateTimeF -> TradeDateTimeF
 
-type TradeKindF = LONG -> IO LONG
-foreign import ccall "dynamic"
+type TradeKindF = CIntPtr -> IO LONG
+foreign import stdcall "dynamic"
   mkTradeKindFun :: FunPtr TradeKindF -> TradeKindF
+
+toDouble :: CDouble -> Double
+toDouble (CDouble x) = x 
 
 data Trans2QuikApi = Trans2QuikApi {
   connect :: ConnectF,
@@ -321,6 +336,32 @@ data Trans2QuikApi = Trans2QuikApi {
   dllHandle :: HMODULE
 }
 
+data QuikOrder = QuikOrder {
+  qoTransId :: Integer,
+  qoOrderId :: Integer,
+  qoTicker :: String,
+  qoPrice :: Double,
+  qoBalance :: Integer,
+  qoSell :: Bool,
+  qoStatus :: Int
+} deriving (Show, Eq, Ord)
+
+data QuikTrade = QuikTrade {
+  qtOrderId :: Integer,
+  qtTicker :: String,
+  qtPrice :: Double,
+  qtQuantity :: Integer,
+  qtSell :: Bool,
+  qtVolume :: Double,
+  qtVolumeCurrency :: String,
+  qtTimestamp :: UTCTime
+} deriving (Show, Eq)
+
+  -- Success -> transaction id -> order num -> IO ()
+type HlTransactionCallback = Bool -> Integer -> Integer -> IO ()
+type HlOrderCallback = QuikOrder -> IO () 
+type HlTradeCallback = QuikTrade -> IO ()
+
 data Quik = Quik {
   quikApi :: Trans2QuikApi,
 
@@ -329,104 +370,237 @@ data Quik = Quik {
   orderCallback :: FunPtr OrderStatusCallback,
   tradeCallback :: FunPtr TradeStatusCallback,
 
+  hlTransactionCallback :: Maybe HlTransactionCallback,
+  hlOrderCallback :: Maybe HlOrderCallback,
+  hlTradeCallback :: Maybe HlTradeCallback,
+
   connected :: Bool,
-  watchdogTid :: ThreadId
+  watchdogTid :: ThreadId,
+
+  handledTrades :: S.Set CLLong,
+  handledOrders :: S.Set QuikOrder
 }
 
-mkQuik :: FilePath -> FilePath -> ConnectionStatusCallback -> TransactionsReplyCallback -> OrderStatusCallback -> TradeStatusCallback -> ExceptT T.Text IO (IORef Quik)
-mkQuik dllpath quikpath conncb transcb orcb tradecb = do
-  api <- loadQuikApi dllpath
+quikSendTransaction :: IORef Quik -> String -> IO (Either T.Text ())
+quikSendTransaction state transactionString = do
+  api <- quikApi <$> readIORef state
+  alloca (\errcode -> 
+    allocaBytes 1024 (\errorMsg ->
+      withCString transactionString (\trs -> do
+        rc <- sendAsyncTransaction api trs errcode errorMsg 1024
+        if rc /= ecSuccess
+          then do
+            msg <- peekCString errorMsg
+            return $ Left $ "Unable to submit transaction: " `T.append` T.pack msg
+          else return $ Right ())))
+  
 
-  conncb' <- liftIO (mkConnectionStatusCallback conncb)
-  transcb' <- liftIO (mkTransactionsReplyCallback transcb)
-  orcb' <- liftIO (mkOrderStatusCallback orcb)
-  tradecb' <- liftIO (mkTradeStatusCallback tradecb)
+setCallbacks :: IORef Quik -> HlTransactionCallback -> HlOrderCallback -> HlTradeCallback -> ExceptT T.Text IO ()
+setCallbacks quik transCb orCb tradeCb =
+  liftIO $ atomicModifyIORef' quik (\s ->
+    ( s { hlTransactionCallback = Just transCb,
+      hlOrderCallback = Just orCb,
+      hlTradeCallback = Just tradeCb }, ()))
+  
+
+mkQuik :: FilePath -> FilePath -> ExceptT T.Text IO (IORef Quik)
+mkQuik dllpath quikpath = do
+  api <- loadQuikApi dllpath
+  
+  liftIO $ debugM "Quik" "Dll loaded"
 
   myTid <- liftIO myThreadId
   state <- liftIO $ newIORef Quik { quikApi = api,
-    connectionCallback = conncb',
+    connected = False,
+    watchdogTid = myTid,
+    hlTransactionCallback = Nothing,
+    hlOrderCallback = Nothing,
+    hlTradeCallback = Nothing,
+    handledTrades = S.empty,
+    handledOrders = S.empty }
+
+  conncb' <- liftIO (mkConnectionStatusCallback (defaultConnectionCb state))
+  transcb' <- liftIO (mkTransactionsReplyCallback (defaultTransactionReplyCb state))
+  orcb' <- liftIO (mkOrderStatusCallback (defaultOrderCb state))
+  tradecb' <- liftIO (mkTradeStatusCallback (defaultTradeCb state))
+
+  liftIO (atomicModifyIORef' state (\s -> (s { connectionCallback = conncb',
     transactionCallback = transcb',
     orderCallback = orcb',
-    tradeCallback = tradecb',
-    connected = False,
-    watchdogTid = myTid }
+    tradeCallback = tradecb' }, ())))
 
   tid <- liftIO (forkIO $ watchdog quikpath state)
-  liftIO $ atomicModifyIORef' (\s -> s { watchdogTid = tid })
+  liftIO $ atomicModifyIORef' state (\s -> (s { watchdogTid = tid }, ()))
+  liftIO $ debugM "Quik" "mkQuik done"
   return state
+
+defaultConnectionCb :: IORef Quik -> LONG -> LONG -> LPSTR -> IO ()
+defaultConnectionCb state event errorCode infoMessage
+  | event == ecDllConnected || event == ecQuikConnected = infoM "Quik" "Quik connected" >> atomicModifyIORef' state (\s -> (s { connected = True }, ()) )
+  | event == ecQuikDisconnected = infoM "Quik" "Quik disconnected" >> atomicModifyIORef' state (\s -> (s { connected = False }, ()) )
+  | otherwise = debugM "Quik" $ "Connection event: " ++ show event
+
+defaultTransactionReplyCb :: IORef Quik -> LONG -> LONG -> LONG -> DWORD -> CLLong -> LPSTR -> CIntPtr -> IO ()
+defaultTransactionReplyCb state transactionResult errorCode replyCode transId orderNum replyMessage replyDesc = do
+  maybecb <- hlTransactionCallback <$> readIORef state
+  case maybecb of
+    Just cb -> cb (transactionResult == ecSuccess) (toInteger transId) (toInteger orderNum)
+    Nothing -> return ()
+
+defaultOrderCb :: IORef Quik -> LONG -> DWORD -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> LONG -> CIntPtr -> IO ()
+defaultOrderCb state mode transId dnumber classCode secCode price balance value sell status desc = do
+  orders <- handledOrders <$> readIORef state
+  when (mode == 0) $ do
+    maybecb <- hlOrderCallback <$> readIORef state
+    ssec <- peekCString secCode
+    sclass <- peekCString classCode
+    let order = mkOrder sclass ssec
+    when (order `S.notMember` orders) $ do
+      atomicModifyIORef' state (\s -> (s { handledOrders = S.insert order (handledOrders s) }, ()))
+      case maybecb of
+        Just cb -> cb order
+        Nothing -> return ()
+      where
+        mkOrder :: String -> String -> QuikOrder
+        mkOrder sclass ssec = QuikOrder {
+          qoTransId = toInteger transId,
+          qoOrderId = toInteger dnumber,
+          qoTicker = sclass ++ "#" ++ ssec,
+          qoPrice = toDouble price,
+          qoBalance = toInteger balance,
+          qoSell = sell == 1,
+          qoStatus = fromIntegral status
+        }
+
+defaultTradeCb :: IORef Quik -> LONG -> CLLong -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> CIntPtr -> IO ()
+defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sell desc = do
+  trades <- handledTrades <$> readIORef state
+  when (mode == 0 && dnumber `S.notMember` trades) $ do
+    atomicModifyIORef' state (\s -> (s { handledTrades = S.insert dnumber (handledTrades s) }, ()))
+    api <- quikApi <$> readIORef state
+    maybecb <- hlTradeCallback <$> readIORef state
+    case maybecb of
+      Just cb -> do
+        ssec <- peekCString secCode
+        sclass <- peekCString classCode
+        ymd <- toInteger <$> tradeDateTime api desc 0
+        hms <- toInteger <$> tradeDateTime api desc 1
+        us <- toInteger <$> tradeDateTime api desc 2
+        currency <- tradeCurrency api desc >>= peekCString
+        cb (trade ssec sclass ymd hms us currency)
+      Nothing -> return ()
+    where
+      trade ssec sclass ymd hms us currency = QuikTrade {
+        qtOrderId = toInteger orderNum,
+        qtTicker = sclass ++ "#" ++ ssec,
+        qtPrice = toDouble price,
+        qtQuantity = toInteger qty,
+        qtSell = sell == 1,
+        qtVolume = toDouble value,
+        qtVolumeCurrency = currency,
+        qtTimestamp = mkTimestamp ymd hms us
+      }
+      mkTimestamp ymd hms us = UTCTime (fromGregorian y mon d) (fromInteger (h * 3600 + m * 60 + s) + fromRational (us % 1000000))
+        where
+          y = ymd `div` 10000
+          mon = fromEnum $ (ymd `mod` 10000) `div` 100
+          d = fromEnum $ ymd `mod` 100
+          h = hms `div` 10000
+          m = (hms `mod` 10000) `div` 100
+          s = hms `mod` 100
+
 
 watchdog :: FilePath -> IORef Quik -> IO ()
 watchdog quikpath state = do
   api <- quikApi <$> readIORef state
   conncb <- connectionCallback <$> readIORef state
+  transcb <- transactionCallback <$> readIORef state
+  orcb <- orderCallback <$> readIORef state
+  tradecb <- tradeCallback <$> readIORef state
 
   alloca (\errorCode ->
     allocaBytes 1024 (\errorMsg -> do
-      err <- setConnectionStatusCallback api $ conncb errorCode errorMsg 1024
-      if err /= EcSuccess
+      err <- setConnectionStatusCallback api conncb errorCode errorMsg 1024
+      if err /= ecSuccess
         then warningM "Quik.Watchdog" $ "Error: " ++ show err
         else forever $ do
           conn <- connected <$> readIORef state
           unless conn $
             withCString quikpath (\path -> do
-              err <- connect api $ path errorCode errorMsg 1024
-              when (err /= EcSuccess) $ warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err)
+              err <- connect api path errorCode errorMsg 1024
+              if err /= ecSuccess
+                then warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err
+                else withCString "" (\emptyStr -> do
+                    (runExceptT $ do
+                      throwIfErr $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
+                      throwIfErr $ subscribeOrders api emptyStr emptyStr
+                      liftIO $ startOrders api orcb
+                      throwIfErr $ subscribeTrades api emptyStr emptyStr
+                      liftIO $ startTrades api tradecb)
+                    return ()))
           threadDelay 5000000))
+
+throwIfErr :: IO LONG -> ExceptT T.Text IO ()
+throwIfErr action = do
+  rc <- liftIO action
+  if rc /= ecSuccess
+    then throwE "Error"
+    else return ()
 
 loadQuikApi :: FilePath -> ExceptT T.Text IO Trans2QuikApi
 loadQuikApi path = do
   dll <- castPtr <$> liftIO (loadLibrary path)
   dll `orFail` "Unable to load Trans2quik.dll"
-  connectPtr <- mkConnectFun <$> tryLoad dll "_TRANS2QUIK_CONNECT@16"
-  disconnectPtr <- mkDisconnectFun <$> tryLoad dll "_TRANS2QUIK_DISCONNECT@12"
-  isQuikConnectedPtr <- mkIsQuikConnectedFun <$> tryLoad dll "_TRANS2QUIK_IS_QUIK_CONNECTED@12"
-  isDllConnectedPtr <- mkIsDllConnectedFun <$> tryLoad dll "_TRANS2QUIK_IS_DLL_CONNECTED@12"
-  sendSyncTransactionPtr <- mkSendSyncTransactionFun <$> tryLoad dll "_TRANS2QUIK_SEND_SYNC_TRANSACTION@36"
-  sendAsyncTransactionPtr <- mkSendAsyncTransactionFun <$> tryLoad dll "_TRANS2QUIK_SEND_ASYNC_TRANSACTION@16"
-  setConnectionStatusCallbackPtr <- mkSetConnectionStatusCallbackFun <$> tryLoad dll "_TRANS2QUIK_SET_CONNECTION_STATUS_CALLBACK@16"
-  setTransactionsReplyCallbackPtr <- mkSetTransactionsReplyCallbackFun <$> tryLoad dll "_TRANS2QUIK_SET_TRANSACTIONS_REPLY_CALLBACK@16"
-  subscribeOrdersPtr <- mkSubscribeOrdersFun <$> tryLoad dll "_TRANS2QUIK_SUBSCRIBE_ORDERS@8"
-  subscribeTradesPtr <- mkSubscribeTradesFun <$> tryLoad dll "_TRANS2QUIK_SUBSCRIBE_TRADES@8"
-  startOrdersPtr <- mkStartOrdersFun <$> tryLoad dll "_TRANS2QUIK_START_ORDERS@4"
-  startTradesPtr <- mkStartTradesFun <$> tryLoad dll "_TRANS2QUIK_START_TRADES@4"
-  unsubscribeOrdersPtr <- mkUnsubscribeOrdersFun <$> tryLoad dll "_TRANS2QUIK_UNSUBSCRIBE_ORDERS@0"
-  unsubscribeTradesPtr <- mkUnsubscribeTradesFun <$> tryLoad dll "_TRANS2QUIK_UNSUBSCRIBE_TRADES@0"
+  connectPtr <- mkConnectFun <$> tryLoad dll "TRANS2QUIK_CONNECT"
+  disconnectPtr <- mkDisconnectFun <$> tryLoad dll "TRANS2QUIK_DISCONNECT"
+  isQuikConnectedPtr <- mkIsQuikConnectedFun <$> tryLoad dll "TRANS2QUIK_IS_QUIK_CONNECTED"
+  isDllConnectedPtr <- mkIsDllConnectedFun <$> tryLoad dll "TRANS2QUIK_IS_DLL_CONNECTED"
+  sendSyncTransactionPtr <- mkSendSyncTransactionFun <$> tryLoad dll "TRANS2QUIK_SEND_SYNC_TRANSACTION"
+  sendAsyncTransactionPtr <- mkSendAsyncTransactionFun <$> tryLoad dll "TRANS2QUIK_SEND_ASYNC_TRANSACTION"
+  setConnectionStatusCallbackPtr <- mkSetConnectionStatusCallbackFun <$> tryLoad dll "TRANS2QUIK_SET_CONNECTION_STATUS_CALLBACK"
+  setTransactionsReplyCallbackPtr <- mkSetTransactionsReplyCallbackFun <$> tryLoad dll "TRANS2QUIK_SET_TRANSACTIONS_REPLY_CALLBACK"
+  subscribeOrdersPtr <- mkSubscribeOrdersFun <$> tryLoad dll "TRANS2QUIK_SUBSCRIBE_ORDERS"
+  subscribeTradesPtr <- mkSubscribeTradesFun <$> tryLoad dll "TRANS2QUIK_SUBSCRIBE_TRADES"
+  startOrdersPtr <- mkStartOrdersFun <$> tryLoad dll "TRANS2QUIK_START_ORDERS"
+  startTradesPtr <- mkStartTradesFun <$> tryLoad dll "TRANS2QUIK_START_TRADES"
+  unsubscribeOrdersPtr <- mkUnsubscribeOrdersFun <$> tryLoad dll "TRANS2QUIK_UNSUBSCRIBE_ORDERS"
+  unsubscribeTradesPtr <- mkUnsubscribeTradesFun <$> tryLoad dll "TRANS2QUIK_UNSUBSCRIBE_TRADES"
 
-  orderQtyPtr <- mkOrderQtyFun <$> tryLoad dll "_TRANS2QUIK_ORDER_QTY@4"
-  orderDatePtr <- mkOrderDateFun <$> tryLoad dll "_TRANS2QUIK_ORDER_DATE@4"
-  orderTimePtr <- mkOrderTimeFun <$> tryLoad dll "_TRANS2QUIK_ORDER_TIME@4"
-  orderActivationTimePtr <- mkOrderActivationTimeFun <$> tryLoad dll "_TRANS2QUIK_ORDER_ACTIVATION_TIME@4"
-  orderWithdrawTimePtr <- mkOrderWithdrawTimeFun <$> tryLoad dll "_TRANS2QUIK_ORDER_WITHDRAW_TIME@4"
-  orderExpiryPtr <- mkOrderExpiryFun <$> tryLoad dll "_TRANS2QUIK_ORDER_EXPIRY@4"
-  orderAccruedIntPtr <- mkOrderAccruedIntFun <$> tryLoad dll "_TRANS2QUIK_ORDER_ACCRUED_INT@4"
-  orderYieldPtr <- mkOrderYieldFun <$> tryLoad dll "_TRANS2QUIK_ORDER_YIELD@4"
-  orderUserIdPtr <- mkOrderUserIdFun <$> tryLoad dll "_TRANS2QUIK_ORDER_USERID@4"
-  orderUidPtr <- mkOrderUidFun <$> tryLoad dll "_TRANS2QUIK_ORDER_UID@4"
-  orderAccountPtr <- mkOrderAccountFun <$> tryLoad dll "_TRANS2QUIK_ORDER_ACCOUNT@4"
-  orderBrokerRefPtr <- mkOrderBrokerRefFun <$> tryLoad dll "_TRANS2QUIK_ORDER_BROKERREF@4"
-  orderClientCodePtr <- mkOrderClientCodeFun <$> tryLoad dll "_TRANS2QUIK_ORDER_CLIENT_CODE@4"
-  orderFirmIdPtr <- mkOrderFirmIdFun <$> tryLoad dll "_TRANS2QUIK_ORDER_FIRMID@4"
-  orderVisibleQtyPtr <- mkOrderVisibleQtyFun <$> tryLoad dll "_TRANS2QUIK_ORDER_VISIBLE_QTY@4"
-  orderPeriodPtr <- mkOrderPeriodFun <$> tryLoad dll "_TRANS2QUIK_ORDER_PERIOD@4"
-  orderDateTimePtr <- mkOrderDateTimeFun <$> tryLoad dll "_TRANS2QUIK_ORDER_DATE_TIME@8"
+  orderQtyPtr <- mkOrderQtyFun <$> tryLoad dll "TRANS2QUIK_ORDER_QTY"
+  orderDatePtr <- mkOrderDateFun <$> tryLoad dll "TRANS2QUIK_ORDER_DATE"
+  orderTimePtr <- mkOrderTimeFun <$> tryLoad dll "TRANS2QUIK_ORDER_TIME"
+  orderActivationTimePtr <- mkOrderActivationTimeFun <$> tryLoad dll "TRANS2QUIK_ORDER_ACTIVATION_TIME"
+  orderWithdrawTimePtr <- mkOrderWithdrawTimeFun <$> tryLoad dll "TRANS2QUIK_ORDER_WITHDRAW_TIME"
+  orderExpiryPtr <- mkOrderExpiryFun <$> tryLoad dll "TRANS2QUIK_ORDER_EXPIRY"
+  orderAccruedIntPtr <- mkOrderAccruedIntFun <$> tryLoad dll "TRANS2QUIK_ORDER_ACCRUED_INT"
+  orderYieldPtr <- mkOrderYieldFun <$> tryLoad dll "TRANS2QUIK_ORDER_YIELD"
+  orderUserIdPtr <- mkOrderUserIdFun <$> tryLoad dll "TRANS2QUIK_ORDER_USERID"
+  orderUidPtr <- mkOrderUidFun <$> tryLoad dll "TRANS2QUIK_ORDER_UID"
+  orderAccountPtr <- mkOrderAccountFun <$> tryLoad dll "TRANS2QUIK_ORDER_ACCOUNT"
+  orderBrokerRefPtr <- mkOrderBrokerRefFun <$> tryLoad dll "TRANS2QUIK_ORDER_BROKERREF"
+  orderClientCodePtr <- mkOrderClientCodeFun <$> tryLoad dll "TRANS2QUIK_ORDER_CLIENT_CODE"
+  orderFirmIdPtr <- mkOrderFirmIdFun <$> tryLoad dll "TRANS2QUIK_ORDER_FIRMID"
+  orderVisibleQtyPtr <- mkOrderVisibleQtyFun <$> tryLoad dll "TRANS2QUIK_ORDER_VISIBLE_QTY"
+  orderPeriodPtr <- mkOrderPeriodFun <$> tryLoad dll "TRANS2QUIK_ORDER_PERIOD"
+  orderDateTimePtr <- mkOrderDateTimeFun <$> tryLoad dll "TRANS2QUIK_ORDER_DATE_TIME"
 
-  tradeDatePtr <- mkTradeDateFun <$> tryLoad dll "_TRANS2QUIK_TRADE_DATE@4"
-  tradeSettleDatePtr <- mkTradeSettleDateFun <$> tryLoad dll "_TRANS2QUIK_TRADE_SETTLE_DATE@4"
-  tradeTimePtr <- mkTradeTimeFun <$> tryLoad dll "_TRANS2QUIK_TRADE_TIME@4"
-  tradeIsMarginalPtr <- mkTradeIsMarginalFun <$> tryLoad dll "_TRANS2QUIK_TRADE_IS_MARGINAL@4"
-  tradeCurrencyPtr <- mkTradeCurrencyFun <$> tryLoad dll "_TRANS2QUIK_TRADE_CURRENCY@4"
-  tradeSettleCurrencyPtr <- mkTradeSettleCurrencyFun <$> tryLoad dll "_TRANS2QUIK_TRADE_SETTLE_CURRENCY@4"
-  tradeSettleCodePtr <- mkTradeSettleCodeFun <$> tryLoad dll "_TRANS2QUIK_TRADE_SETTLE_CODE@4"
-  tradeAccruedIntPtr <- mkTradeAccruedIntFun <$> tryLoad dll "_TRANS2QUIK_TRADE_ACCRUED_INT@4"
-  tradeYieldPtr <- mkTradeYieldFun <$> tryLoad dll "_TRANS2QUIK_TRADE_YIELD@4"
-  tradeUserIdPtr <- mkTradeUserIdFun <$> tryLoad dll "_TRANS2QUIK_TRADE_USERID@4"
-  tradeAccountPtr <- mkTradeAccountFun <$> tryLoad dll "_TRANS2QUIK_TRADE_ACCOUNT@4"
-  tradeBrokerRefPtr <- mkTradeBrokerRefFun <$> tryLoad dll "_TRANS2QUIK_TRADE_BROKERREF@4"
-  tradeClientCodePtr <- mkTradeClientCodeFun <$> tryLoad dll "_TRANS2QUIK_TRADE_CLIENT_CODE@4"
-  tradeTsCommissionPtr <- mkTradeTsCommissionFun <$> tryLoad dll "_TRANS2QUIK_TRADE_TS_COMMISSION@4"
-  tradePeriodPtr <- mkTradePeriodFun <$> tryLoad dll "_TRANS2QUIK_TRADE_PERIOD@4"
-  tradeDateTimePtr <- mkTradeDateTimeFun <$> tryLoad dll "_TRANS2QUIK_TRADE_DATE_TIME@8"
-  tradeKindPtr <- mkTradeKindFun <$> tryLoad dll "_TRANS2QUIK_TRADE_KIND@4"
+  tradeDatePtr <- mkTradeDateFun <$> tryLoad dll "TRANS2QUIK_TRADE_DATE"
+  tradeSettleDatePtr <- mkTradeSettleDateFun <$> tryLoad dll "TRANS2QUIK_TRADE_SETTLE_DATE"
+  tradeTimePtr <- mkTradeTimeFun <$> tryLoad dll "TRANS2QUIK_TRADE_TIME"
+  tradeIsMarginalPtr <- mkTradeIsMarginalFun <$> tryLoad dll "TRANS2QUIK_TRADE_IS_MARGINAL"
+  tradeCurrencyPtr <- mkTradeCurrencyFun <$> tryLoad dll "TRANS2QUIK_TRADE_CURRENCY"
+  tradeSettleCurrencyPtr <- mkTradeSettleCurrencyFun <$> tryLoad dll "TRANS2QUIK_TRADE_SETTLE_CURRENCY"
+  tradeSettleCodePtr <- mkTradeSettleCodeFun <$> tryLoad dll "TRANS2QUIK_TRADE_SETTLE_CODE"
+  tradeAccruedIntPtr <- mkTradeAccruedIntFun <$> tryLoad dll "TRANS2QUIK_TRADE_ACCRUED_INT"
+  tradeYieldPtr <- mkTradeYieldFun <$> tryLoad dll "TRANS2QUIK_TRADE_YIELD"
+  tradeUserIdPtr <- mkTradeUserIdFun <$> tryLoad dll "TRANS2QUIK_TRADE_USERID"
+  tradeAccountPtr <- mkTradeAccountFun <$> tryLoad dll "TRANS2QUIK_TRADE_ACCOUNT"
+  tradeBrokerRefPtr <- mkTradeBrokerRefFun <$> tryLoad dll "TRANS2QUIK_TRADE_BROKERREF"
+  tradeClientCodePtr <- mkTradeClientCodeFun <$> tryLoad dll "TRANS2QUIK_TRADE_CLIENT_CODE"
+  tradeTsCommissionPtr <- mkTradeTsCommissionFun <$> tryLoad dll "TRANS2QUIK_TRADE_TS_COMMISSION"
+  tradePeriodPtr <- mkTradePeriodFun <$> tryLoad dll "TRANS2QUIK_TRADE_PERIOD"
+  tradeDateTimePtr <- mkTradeDateTimeFun <$> tryLoad dll "TRANS2QUIK_TRADE_DATE_TIME"
+  tradeKindPtr <- mkTradeKindFun <$> tryLoad dll "TRANS2QUIK_TRADE_KIND"
 
   return Trans2QuikApi {
     connect = connectPtr,
@@ -496,5 +670,4 @@ loadQuikApi path = do
       return $ castPtrToFunPtr p
 
     getProcAddress' dll proc = withCAString proc (c_GetProcAddress dll . castPtr)
-
 
