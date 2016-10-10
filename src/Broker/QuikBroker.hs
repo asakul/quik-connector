@@ -125,8 +125,9 @@ makeTransactionString transId order =
     seccode = (`atMay` 1) . splitOn "#" . T.unpack $ orderSecurity order
     price = case orderPrice order of
       Market -> "0"
-      Limit p -> L.dropWhileEnd (== '.') . L.dropWhileEnd (== '0') . show $ p
+      Limit p -> removeTrailingZeros . show $ p
       _ -> "0"
+    removeTrailingZeros v = if '.' `L.elem` v then L.dropWhileEnd (== '.') . L.dropWhileEnd (== '0') $ v else v
 
 makeCancelTransactionString transId order orderId =
   case (classcode, seccode) of
