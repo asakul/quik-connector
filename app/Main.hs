@@ -89,16 +89,16 @@ parseConfig = withObject "object" $ \obj -> do
         tableName = tn,
         tableParams = params }
 
-forkBoundedChan :: Int -> BoundedChan a -> IO (ThreadId, BoundedChan a, BoundedChan (Maybe a))
+forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan QuoteSourceServerData)
 forkBoundedChan size source = do
   sink <- newBoundedChan size
-  sinkMaybe <- newBoundedChan size
+  sinkQss <- newBoundedChan size
   tid <- forkIO $ forever $ do
     v <- readChan source
     tryWriteChan sink v
-    tryWriteChan sinkMaybe (Just v)
+    tryWriteChan sinkQss (QSSTick v)
 
-  return (tid, sink, sinkMaybe)
+  return (tid, sink, sinkQss)
 
 
 main :: IO ()

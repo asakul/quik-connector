@@ -91,6 +91,7 @@ pbSubmitOrder state order = do
         Just tick -> let newOrder = order { orderState = Executed }
                          tradeVolume = (realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick) in do
           atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()) )
+          debugM "PaperBroker" $ "Executed: " ++ show newOrder
           ts <- getCurrentTime
           maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
           maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
