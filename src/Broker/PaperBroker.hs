@@ -11,6 +11,8 @@ import Control.DeepSeq
 import Data.Hashable
 import Data.Bits
 import Control.Concurrent.BoundedChan
+import Control.Concurrent.STM
+import Control.Concurrent.STM.TBQueue
 import ATrade.Types
 import Data.IORef
 import qualified Data.HashMap.Strict as M
@@ -31,14 +33,14 @@ instance Hashable TickMapKey where
 
 data PaperBrokerState = PaperBrokerState {
   pbTid :: Maybe ThreadId,
-  tickChannel :: BoundedChan Tick,
+  tickChannel :: TBQueue Tick,
   tickMap :: M.HashMap TickMapKey Tick,
   orders :: M.HashMap OrderId Order,
   cash :: ! Decimal,
   notificationCallback :: Maybe (Notification -> IO ())
 }
 
-mkPaperBroker :: BoundedChan Tick -> Decimal -> [T.Text] -> IO BrokerInterface
+mkPaperBroker :: TBQueue Tick -> Decimal -> [T.Text] -> IO BrokerInterface
 mkPaperBroker tickChan startCash accounts = do
   state <- newIORef PaperBrokerState {
     pbTid = Nothing,
@@ -62,7 +64,7 @@ brokerThread :: IORef PaperBrokerState -> IO ()
 brokerThread state = do
   chan <- tickChannel <$> readIORef state
   forever $ do
-    tick <- readChan chan
+    tick <- atomically $ readTBQueue chan
     atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()) )
   where
     makeKey !tick = TickMapKey (security $! tick) (datatype tick)

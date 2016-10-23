@@ -9,6 +9,8 @@ import Control.Monad.IO.Class
 import Data.IORef
 import Graphics.UI.Gtk hiding (Action, backspace)
 import Control.Concurrent.BoundedChan
+import Control.Concurrent.STM
+import Control.Concurrent.STM.TBQueue
 import ATrade.Types
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
@@ -89,14 +91,15 @@ parseConfig = withObject "object" $ \obj -> do
         tableName = tn,
         tableParams = params }
 
-forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan QuoteSourceServerData)
+forkBoundedChan :: Int -> TBQueue Tick -> IO (ThreadId, TBQueue Tick, TBQueue QuoteSourceServerData)
 forkBoundedChan size source = do
-  sink <- newBoundedChan size
-  sinkQss <- newBoundedChan size
+  sink <- atomically $ newTBQueue size
+  sinkQss <- atomically $ newTBQueue size
   tid <- forkIO $ forever $ do
-    v <- readChan source
-    tryWriteChan sink v
-    tryWriteChan sinkQss (QSSTick v)
+    v <- atomically $ readTBQueue source
+    atomically $ do
+      writeTBQueue sink v
+      writeTBQueue sinkQss (QSSTick v)
 
   return (tid, sink, sinkQss)
 
@@ -108,7 +111,7 @@ main = do
   config <- readConfig "quik-connector.config.json"
 
   infoM "main" "Config loaded"
-  chan <- newBoundedChan 1000
+  chan <- atomically $ newTBQueue 1000
   infoM "main" "Starting data import server"
   dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
 

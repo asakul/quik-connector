@@ -51,6 +51,9 @@ library
                      , split
                      , bimap
                      , safe
+                     , conduit
+                     , stm
+                     , stm-conduit
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser
@@ -75,6 +78,7 @@ executable quik-connector-exe
                      , zeromq4-haskell
                      , libatrade
                      , transformers
+                     , stm
   default-language:    Haskell2010
   extra-libraries:     "user32"
 
