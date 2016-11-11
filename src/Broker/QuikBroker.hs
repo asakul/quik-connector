@@ -102,9 +102,9 @@ qbCancelOrder state orderid = do
 qbStopBroker state = return ()
 
 makeTransactionString transId order =
-  case (classcode, seccode) of
-    (Just cCode, Just sCode) -> Just $
-      "ACCOUNT=" ++ T.unpack (orderAccountId order) ++ ";" ++
+  case (classcode, seccode, accountTransactionString) of
+    (Just cCode, Just sCode, Just accountStr) -> Just $
+      accountStr ++
       "TYPE=" ++ orderTypeCode ++ ";" ++
       "TRANS_ID=" ++ show transId ++ ";" ++
       "CLASSCODE=" ++ cCode ++ ";" ++
@@ -128,6 +128,10 @@ makeTransactionString transId order =
       Limit p -> removeTrailingZeros . show $ p
       _ -> "0"
     removeTrailingZeros v = if '.' `L.elem` v then L.dropWhileEnd (== '.') . L.dropWhileEnd (== '0') $ v else v
+    accountTransactionString = case T.splitOn "#" (orderAccountId order) of
+      [accountStr, clientCodeStr] -> Just $ "ACCOUNT=" ++ T.unpack accountStr ++ ";CLIENT_CODE=" ++ T.unpack clientCodeStr ++ ";"
+      [accountStr] -> Just $ "ACCOUNT=" ++ T.unpack accountStr ++ ";"
+      _ -> Nothing
 
 makeCancelTransactionString transId order orderId =
   case (classcode, seccode) of
