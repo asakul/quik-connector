@@ -374,7 +374,7 @@ data Quik = Quik {
   hlOrderCallback :: Maybe HlOrderCallback,
   hlTradeCallback :: Maybe HlTradeCallback,
 
-  connected :: Bool,
+  connectedToServer :: Bool,
   watchdogTid :: ThreadId,
 
   handledTrades :: S.Set CLLong,
@@ -411,7 +411,7 @@ mkQuik dllpath quikpath = do
 
   myTid <- liftIO myThreadId
   state <- liftIO $ newIORef Quik { quikApi = api,
-    connected = False,
+    connectedToServer = False,
     watchdogTid = myTid,
     hlTransactionCallback = Nothing,
     hlOrderCallback = Nothing,
@@ -436,8 +436,8 @@ mkQuik dllpath quikpath = do
 
 defaultConnectionCb :: IORef Quik -> LONG -> LONG -> LPSTR -> IO ()
 defaultConnectionCb state event errorCode infoMessage
-  | event == ecDllConnected || event == ecQuikConnected = infoM "Quik" "Quik connected" >> atomicModifyIORef' state (\s -> (s { connected = True }, ()) )
-  | event == ecQuikDisconnected = infoM "Quik" "Quik disconnected" >> atomicModifyIORef' state (\s -> (s { connected = False }, ()) )
+  | event == ecQuikConnected = infoM "Quik" "Quik connected" >> atomicModifyIORef' state (\s -> (s { connectedToServer = True }, ()) )
+  | event == ecQuikDisconnected = infoM "Quik" "Quik disconnected" >> atomicModifyIORef' state (\s -> (s { connectedToServer = False }, ()) )
   | otherwise = debugM "Quik" $ "Connection event: " ++ show event
 
 defaultTransactionReplyCb :: IORef Quik -> LONG -> LONG -> LONG -> DWORD -> CLLong -> LPSTR -> CIntPtr -> IO ()
@@ -520,24 +520,23 @@ watchdog quikpath state = do
 
   alloca (\errorCode ->
     allocaBytes 1024 (\errorMsg -> do
+      withCString "" (\emptyStr -> do
+        (runExceptT $ do
+          throwIfErr $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
+          throwIfErr $ subscribeOrders api emptyStr emptyStr
+          liftIO $ startOrders api orcb
+          throwIfErr $ subscribeTrades api emptyStr emptyStr
+          liftIO $ startTrades api tradecb))
+
       err <- setConnectionStatusCallback api conncb errorCode errorMsg 1024
       if err /= ecSuccess
         then warningM "Quik.Watchdog" $ "Error: " ++ show err
         else forever $ do
-          conn <- connected <$> readIORef state
-          unless conn $
+          conn <- isDllConnected api errorCode errorMsg 1024
+          when (conn == ecDllNotConnected) $
             withCString quikpath (\path -> do
               err <- connect api path errorCode errorMsg 1024
-              if err /= ecSuccess
-                then warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err
-                else withCString "" (\emptyStr -> do
-                    (runExceptT $ do
-                      throwIfErr $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
-                      throwIfErr $ subscribeOrders api emptyStr emptyStr
-                      liftIO $ startOrders api orcb
-                      throwIfErr $ subscribeTrades api emptyStr emptyStr
-                      liftIO $ startTrades api tradecb)
-                    return ()))
+              when (err /= ecSuccess) $ warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err)
           threadDelay 5000000))
 
 throwIfErr :: IO LONG -> ExceptT T.Text IO ()
