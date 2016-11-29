@@ -49,7 +49,8 @@ data Config = Config {
   tables :: [TableConfig],
   quikPath :: String,
   dllPath :: String,
-  quikAccounts :: [T.Text]
+  quikAccounts :: [T.Text],
+  tradeSink :: T.Text
 } deriving (Show)
 
 readConfig :: String -> IO Config
@@ -68,13 +69,15 @@ parseConfig = withObject "object" $ \obj -> do
     Nothing -> fail "Expected tables array"
   qp <- obj .: "quik-path"
   dp <- obj .: "dll-path"
+  trsink <- obj .: "trade-sink"
   accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
     brokerserverEndpoint = bse,
     tables = rt,
     quikPath = qp,
     dllPath = dp,
-    quikAccounts = fmap T.pack accs }
+    quikAccounts = fmap T.pack accs,
+    tradeSink = trsink }
   where
     parseTables :: Value -> Parser [TableConfig]
     parseTables = withArray "array" $ \arr -> mapM parseTableConfig (V.toList arr)
@@ -124,7 +127,7 @@ main = do
     Right brokerQ ->
       withContext (\ctx ->
         bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
-          bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config)) stopBrokerServer (\broServer -> do
+          bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) (tradeSink config)) stopBrokerServer (\broServer -> do
             void initGUI
             window <- windowNew
             window `on` deleteEvent $ do
