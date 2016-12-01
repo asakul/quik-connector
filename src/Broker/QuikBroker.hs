@@ -18,10 +18,17 @@ import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Bimap as BM
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import Data.Text.Format
 
+import Control.Monad
+import Control.Concurrent
+import Control.Concurrent.BoundedChan
 import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
 import System.Log.Logger
+
+import Network.Telegram
 
 import Safe
 
@@ -33,7 +40,9 @@ data QuikBrokerState = QuikBrokerState {
   orderMap :: M.Map OrderId Order,
   orderIdMap :: BM.Bimap QuikOrderId OrderId,
   trans2orderid :: M.Map Integer Order,
-  transIdCounter :: Integer
+  transIdCounter :: Integer,
+  messageChan :: BoundedChan T.Text,
+  messageTid :: Maybe ThreadId
 }
 
 nextTransId state = atomicModifyIORef' state (\s -> (s { transIdCounter = transIdCounter s + 1 }, transIdCounter s))
@@ -44,9 +53,26 @@ maybeCall proj state arg = do
     Just callback -> callback arg
     Nothing -> return ()
 
-mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> ExceptT T.Text IO BrokerInterface
-mkQuikBroker dllPath quikPath accs = do
+messageThread tgCtx chatId msgChan = forever $ do
+  maybeMsg <- tryReadChan msgChan
+  case maybeMsg of
+    Just msg -> do
+      sendMessage tgCtx chatId msg
+      warningM "Quik.Telegram" $ "Telegram message sent: " ++ T.unpack msg
+    Nothing -> threadDelay 500000
+
+
+mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> Maybe (T.Text, T.Text) -> ExceptT T.Text IO BrokerInterface
+mkQuikBroker dllPath quikPath accs tgParams = do
   q <- mkQuik dllPath quikPath
+
+  msgChan <- liftIO $ newBoundedChan 100
+  msgTid <- liftIO $ case tgParams of
+    Nothing -> return Nothing
+    Just (tgToken, chatId) -> do
+      tgCtx <- mkTelegramContext tgToken
+      tid <- forkIO $ messageThread tgCtx chatId msgChan
+      return $ Just tid
 
   state <- liftIO $ newIORef QuikBrokerState {
     notificationCallback = Nothing,
@@ -54,7 +80,9 @@ mkQuikBroker dllPath quikPath accs = do
     orderMap = M.empty,
     orderIdMap = BM.empty,
     trans2orderid = M.empty,
-    transIdCounter = 1
+    transIdCounter = 1,
+    messageChan = msgChan,
+    messageTid = msgTid
   }
 
   setCallbacks q (qbTransactionCallback state) (qbOrderCallback state) (qbTradeCallback state)
@@ -78,6 +106,7 @@ qbSubmitOrder state order = do
   case makeTransactionString transId order of
     Just transStr -> do
       rc <- quikSendTransaction q transStr
+      debugM "Quik" $ "Sending transaction string: " ++ transStr
       case rc of
         Left errmsg -> warningM "Quik" $ "Unable to send transaction: " ++ T.unpack errmsg
         Right _ -> debugM "Quik" $ "Order submitted: " ++ show order
@@ -193,7 +222,10 @@ qbTradeCallback state quiktrade = do
   idMap <- orderIdMap <$> readIORef state
   debugM "Quik" $ "Trade: " ++ show quiktrade
   case BM.lookup (qtOrderId quiktrade) idMap >>= flip M.lookup orders of
-    Just order -> maybeCall notificationCallback state (TradeNotification $ tradeFor order)
+    Just order -> do
+      msgChan <- messageChan <$> readIORef state
+      tryWriteChan msgChan $ TL.toStrict $ format "Trade: {} of {} at {} for account {}" (show (tradeOperation (tradeFor order)), orderSecurity order, qtPrice quiktrade, orderAccountId order)
+      maybeCall notificationCallback state (TradeNotification $ tradeFor order)
     Nothing -> warningM "Quik" $ "Incoming trade for unknown order: " ++ show quiktrade
   where
     tradeFor order = Trade {

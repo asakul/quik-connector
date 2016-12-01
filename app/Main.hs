@@ -37,6 +37,8 @@ import qualified Data.Text as T
 import Control.Monad.Trans.Except
 import Broker.QuikBroker.Trans2QuikApi
 
+import Network.Telegram
+
 data TableConfig = TableConfig {
   parserId :: String,
   tableName :: String,
@@ -50,7 +52,9 @@ data Config = Config {
   quikPath :: String,
   dllPath :: String,
   quikAccounts :: [T.Text],
-  tradeSink :: T.Text
+  tradeSink :: T.Text,
+  telegramToken :: T.Text,
+  telegramChatId :: T.Text
 } deriving (Show)
 
 readConfig :: String -> IO Config
@@ -70,6 +74,8 @@ parseConfig = withObject "object" $ \obj -> do
   qp <- obj .: "quik-path"
   dp <- obj .: "dll-path"
   trsink <- obj .: "trade-sink"
+  tgToken <- obj .: "telegram-token"
+  tgChatId <- obj .: "telegram-chatid"
   accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
     brokerserverEndpoint = bse,
@@ -77,7 +83,9 @@ parseConfig = withObject "object" $ \obj -> do
     quikPath = qp,
     dllPath = dp,
     quikAccounts = fmap T.pack accs,
-    tradeSink = trsink }
+    tradeSink = trsink,
+    telegramToken = tgToken,
+    telegramChatId = tgChatId }
   where
     parseTables :: Value -> Parser [TableConfig]
     parseTables = withArray "array" $ \arr -> mapM parseTableConfig (V.toList arr)
@@ -121,7 +129,9 @@ main = do
   (forkId, c1, c2) <- forkBoundedChan 1000 chan
 
   broker <- mkPaperBroker c1 1000000 ["demo"]
-  eitherBrokerQ <- runExceptT $ mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config)
+  eitherBrokerQ <- runExceptT $ mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config) (Just (telegramToken config, telegramChatId config))
+  tgCtx <- mkTelegramContext (telegramToken config)
+  sendMessage tgCtx (telegramChatId config) "Goldmine-Quik connector started"
   case eitherBrokerQ of
     Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
     Right brokerQ ->
