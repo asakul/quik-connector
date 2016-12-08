@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
+import System.IO
+
 import QuoteSource.DataImport
 import Control.Concurrent hiding (readChan)
 import Control.Monad
@@ -107,9 +109,18 @@ forkBoundedChan size source = do
   return (tid, sink, sinkQss)
 
 
+initLogging = do
+  handler <- streamHandler stderr DEBUG >>=
+    (\x -> return $
+      setFormatter x (simpleLogFormatter "$utcTime\t {$loggername} <$prio> -> $msg"))
+
+  hSetBuffering stderr LineBuffering
+  updateGlobalLogger rootLoggerName (setLevel DEBUG)
+  updateGlobalLogger rootLoggerName (setHandlers [handler])
+
 main :: IO ()
 main = do
-  updateGlobalLogger rootLoggerName (setLevel DEBUG)
+  initLogging
   infoM "main" "Loading config"
   config <- readConfig "quik-connector.config.json"
 
