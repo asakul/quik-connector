@@ -21,6 +21,7 @@ library
                      , Broker.PaperBroker
                      , Broker.QuikBroker
                      , Broker.QuikBroker.Trans2QuikApi
+                     , Network.Telegram
   ghc-options:         -Wincomplete-patterns
   build-depends:       base >= 4.7 && < 5
                      , Win32
@@ -54,6 +55,11 @@ library
                      , conduit
                      , stm
                      , stm-conduit
+                     , http-client
+                     , http-client-tls
+                     , utf8-string
+                     , connection
+                     , text-format
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser
@@ -79,6 +85,10 @@ executable quik-connector-exe
                      , libatrade
                      , transformers
                      , stm
+                     , http-client
+                     , http-client-tls
+                     , utf8-string
+                     , connection
   default-language:    Haskell2010
   extra-libraries:     "user32"
 

@@ -442,6 +442,7 @@ defaultConnectionCb state event errorCode infoMessage
 
 defaultTransactionReplyCb :: IORef Quik -> LONG -> LONG -> LONG -> DWORD -> CLLong -> LPSTR -> CIntPtr -> IO ()
 defaultTransactionReplyCb state transactionResult errorCode replyCode transId orderNum replyMessage replyDesc = do
+  debugM "Quik" $ "Transaction cb:" ++ show transactionResult ++ "/" ++ show errorCode ++ "/" ++ show replyCode
   maybecb <- hlTransactionCallback <$> readIORef state
   case maybecb of
     Just cb -> cb (transactionResult == ecSuccess) (toInteger transId) (toInteger orderNum)
@@ -449,6 +450,7 @@ defaultTransactionReplyCb state transactionResult errorCode replyCode transId or
 
 defaultOrderCb :: IORef Quik -> LONG -> DWORD -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> LONG -> CIntPtr -> IO ()
 defaultOrderCb state mode transId dnumber classCode secCode price balance value sell status desc = do
+  debugM "Quik" $ "Trade cb: " ++ show mode ++ "/" ++ show dnumber ++ "/" ++ show transId
   orders <- handledOrders <$> readIORef state
   when (mode == 0) $ do
     maybecb <- hlOrderCallback <$> readIORef state
@@ -474,6 +476,7 @@ defaultOrderCb state mode transId dnumber classCode secCode price balance value 
 
 defaultTradeCb :: IORef Quik -> LONG -> CLLong -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> CIntPtr -> IO ()
 defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sell desc = do
+  debugM "Quik" $ "Trade cb: " ++ show mode ++ "/" ++ show dnumber
   trades <- handledTrades <$> readIORef state
   when (mode == 0 && dnumber `S.notMember` trades) $ do
     atomicModifyIORef' state (\s -> (s { handledTrades = S.insert dnumber (handledTrades s) }, ()))
@@ -520,13 +523,6 @@ watchdog quikpath state = do
 
   alloca (\errorCode ->
     allocaBytes 1024 (\errorMsg -> do
-      withCString "" (\emptyStr -> do
-        (runExceptT $ do
-          throwIfErr $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
-          throwIfErr $ subscribeOrders api emptyStr emptyStr
-          liftIO $ startOrders api orcb
-          throwIfErr $ subscribeTrades api emptyStr emptyStr
-          liftIO $ startTrades api tradecb))
 
       err <- setConnectionStatusCallback api conncb errorCode errorMsg 1024
       if err /= ecSuccess
@@ -536,7 +532,18 @@ watchdog quikpath state = do
           when (conn == ecDllNotConnected) $
             withCString quikpath (\path -> do
               err <- connect api path errorCode errorMsg 1024
-              when (err /= ecSuccess) $ warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err)
+              if err /= ecSuccess
+                then warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err
+                else withCString "" (\emptyStr -> do
+                  res <- (runExceptT $ do
+                    throwIfErr $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
+                    throwIfErr $ subscribeOrders api emptyStr emptyStr
+                    liftIO $ startOrders api orcb
+                    throwIfErr $ subscribeTrades api emptyStr emptyStr
+                    liftIO $ startTrades api tradecb)
+                  case res of
+                    Left err -> warningM "Quik.Watchdog" $ "Unable to set callbacks: " ++ show err
+                    Right _ -> debugM "Quik.Watchdog" "Callbacks are set"))
           threadDelay 5000000))
 
 throwIfErr :: IO LONG -> ExceptT T.Text IO ()
