@@ -3,7 +3,8 @@
 module Network.Telegram 
 (
   mkTelegramContext,
-  sendMessage
+  sendMessage,
+  Manager
 ) where
 
 import Control.Monad
@@ -22,9 +23,8 @@ data TelegramContext = TelegramContext {
   httpMan :: Manager
 }
 
-mkTelegramContext :: T.Text -> IO TelegramContext
-mkTelegramContext token = do
-  man <- newManager (mkManagerSettings (TLSSettingsSimple { settingDisableCertificateValidation = True, settingDisableSession = False, settingUseServerName = False }) Nothing)
+mkTelegramContext :: Manager -> T.Text -> IO TelegramContext
+mkTelegramContext man token = do
   return TelegramContext { httpMan = man, tgToken = token }
 
 

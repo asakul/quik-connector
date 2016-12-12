@@ -31,7 +31,7 @@ import Control.Monad
 import Data.Bits
 import Data.Binary.Get
 import Data.Typeable
-import Data.ByteString hiding (map)
+import Data.ByteString hiding (map, putStrLn)
 import Data.IORef
 import System.Win32.XlParser
 import System.Win32.DLL
@@ -65,31 +65,31 @@ ddeCpWinAnsi = 1004
 
 instance Exception DdeException
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeInitializeW"
+foreign import WINDOWS_CCONV "windows.h DdeInitializeW"
   ddeInitialize :: LPDWORD -> FunPtr DdeCallback -> DWORD -> DWORD -> IO CUInt
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeUninitialize"
+foreign import WINDOWS_CCONV "windows.h DdeUninitialize"
   ddeUninitialize :: DWORD -> IO BOOL
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeCreateStringHandleW"
+foreign import WINDOWS_CCONV "windows.h DdeCreateStringHandleW"
   ddeCreateStringHandle :: DWORD -> LPSTR -> CInt -> IO HANDLE
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeFreeStringHandleW"
+foreign import WINDOWS_CCONV "windows.h DdeFreeStringHandleW"
   ddeFreeStringHandle :: DWORD -> LPSTR -> IO HANDLE
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeNameService"
+foreign import WINDOWS_CCONV "windows.h DdeNameService"
   ddeNameService :: DWORD -> HANDLE -> HANDLE -> CInt -> IO HANDLE
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeCmpStringHandles"
+foreign import WINDOWS_CCONV "windows.h DdeCmpStringHandles"
   ddeCmpStringHandles :: HANDLE -> HANDLE -> IO CInt
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeQueryStringW"
+foreign import WINDOWS_CCONV "windows.h DdeQueryStringW"
   ddeQueryString :: DWORD -> HANDLE -> CString -> DWORD -> CInt -> IO DWORD
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeAccessData"
+foreign import WINDOWS_CCONV "windows.h DdeAccessData"
   ddeAccessData :: HANDLE -> LPDWORD -> IO (Ptr CUChar)
 
-foreign import WINDOWS_CCONV unsafe "windows.h DdeUnaccessData"
+foreign import WINDOWS_CCONV "windows.h DdeUnaccessData"
   ddeUnaccessData :: HANDLE -> IO ()
 
 foreign import WINDOWS_CCONV "wrapper"
@@ -133,13 +133,14 @@ ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2
       maybeTopic <- queryString myDdeState 256 hsz1
       case maybeTopic of
         Nothing -> return ddeResultFalse
-        Just topic -> withDdeData hData (\xlData -> case runGetOrFail xlParser $ BL.fromStrict xlData of
-          Left (_,  _, errmsg) -> return ddeResultFalse
-          Right (_, _, table) -> do
-            rc <- (dataCallback myDdeState) topic table
-            return $ if rc
-              then ddeResultAck
-              else ddeResultFalse )
+        Just topic -> withDdeData hData (\xlData -> do
+          case runGetOrFail xlParser $ BL.fromStrict xlData of
+            Left (_,  _, errmsg) -> return ddeResultFalse
+            Right (_, _, table) -> do
+              rc <- (dataCallback myDdeState) topic table
+              return $ if rc
+                then ddeResultAck
+                else ddeResultFalse )
 
 initializeDde :: String -> String -> DdeDataCallback -> IO (IORef DdeState)
 initializeDde appName topic callback = alloca (\instancePtr -> do

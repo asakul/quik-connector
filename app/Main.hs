@@ -4,15 +4,13 @@ module Main where
 import System.IO
 
 import QuoteSource.DataImport
-import Control.Concurrent hiding (readChan)
+import Control.Concurrent hiding (readChan, writeChan)
 import Control.Monad
 import Control.Exception
 import Control.Monad.IO.Class
 import Data.IORef
 import Graphics.UI.Gtk hiding (Action, backspace)
 import Control.Concurrent.BoundedChan
-import Control.Concurrent.STM
-import Control.Concurrent.STM.TBQueue
 import ATrade.Types
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
@@ -40,6 +38,9 @@ import Control.Monad.Trans.Except
 import Broker.QuikBroker.Trans2QuikApi
 
 import Network.Telegram
+import Network.Connection
+import Network.HTTP.Client
+import Network.HTTP.Client.TLS
 
 data TableConfig = TableConfig {
   parserId :: String,
@@ -104,15 +105,14 @@ parseConfig = withObject "object" $ \obj -> do
         tableName = tn,
         tableParams = params }
 
-forkBoundedChan :: Int -> TBQueue Tick -> IO (ThreadId, TBQueue Tick, TBQueue QuoteSourceServerData)
+forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan QuoteSourceServerData)
 forkBoundedChan size source = do
-  sink <- atomically $ newTBQueue size
-  sinkQss <- atomically $ newTBQueue size
+  sink <- newBoundedChan size
+  sinkQss <- newBoundedChan size
   tid <- forkIO $ forever $ do
-    v <- atomically $ readTBQueue source
-    atomically $ do
-      writeTBQueue sink v
-      writeTBQueue sinkQss (QSSTick v)
+      v <- readChan source
+      writeChan sink v
+      writeChan sinkQss (QSSTick v)
 
   return (tid, sink, sinkQss)
 
@@ -133,15 +133,17 @@ main = do
   config <- readConfig "quik-connector.config.json"
 
   infoM "main" "Config loaded"
-  chan <- atomically $ newTBQueue 1000
+  chan <- newBoundedChan 10000
   infoM "main" "Starting data import server"
   dis <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
 
-  (forkId, c1, c2) <- forkBoundedChan 1000 chan
+  (forkId, c1, c2) <- forkBoundedChan 10000 chan
 
   broker <- mkPaperBroker c1 1000000 ["demo"]
-  eitherBrokerQ <- runExceptT $ mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config) (Just (telegramToken config, telegramChatId config))
-  tgCtx <- mkTelegramContext (telegramToken config)
+  man <- newManager (mkManagerSettings (TLSSettingsSimple { settingDisableCertificateValidation = True, settingDisableSession = False, settingUseServerName = False }) Nothing)
+  infoM "main" "Http manager created"
+  eitherBrokerQ <- runExceptT $ mkQuikBroker man (dllPath config) (quikPath config) (quikAccounts config) (Just (telegramToken config, telegramChatId config))
+  tgCtx <- mkTelegramContext man (telegramToken config)
   sendMessage tgCtx (telegramChatId config) "Goldmine-Quik connector started"
   case eitherBrokerQ of
     Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg

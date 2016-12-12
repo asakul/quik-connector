@@ -7,8 +7,6 @@ module QuoteSource.DataImport
 ) where
 
 import Control.Concurrent.BoundedChan
-import Control.Concurrent.STM
-import Control.Concurrent.STM.TBQueue
 import Control.Monad.State.Strict
 import ATrade.Types
 import Data.IORef
@@ -22,7 +20,7 @@ import qualified Data.Map as M
 data ServerState = ServerState {
   appName :: String,
   parsers :: IORef (M.Map String TableParserInstance),
-  tickChannel :: TBQueue Tick
+  tickChannel :: BoundedChan Tick
 }
 
 ddeCallback :: ServerState -> String -> (Int, Int, [XlData]) -> IO Bool
@@ -34,12 +32,12 @@ ddeCallback state topic table = do
       let stateWithTimeHint = giveTimestampHint myParser timeHint
       let (ticks, newState) = runState (parseXlTable table) stateWithTimeHint
       modifyIORef' (parsers state) (\s -> newState `seq` s `seq` M.insert topic (MkTableParser newState) s)
-      mapM_ (atomically . writeTBQueue (tickChannel state)) ticks
+      mapM_ (writeChan (tickChannel state)) ticks
       return True
     _ -> return False
 
 
-initDataImportServer :: [TableParserInstance] -> TBQueue Tick -> String -> IO (ServerState, IORef DdeState)
+initDataImportServer :: [TableParserInstance] -> BoundedChan Tick -> String -> IO (ServerState, IORef DdeState)
 initDataImportServer parsers tickChan applicationName = do
   parsers <- newIORef $ M.fromList $ map (\(MkTableParser p) -> (getTableId p, MkTableParser p)) parsers
   let s = ServerState { appName = applicationName, parsers = parsers, tickChannel = tickChan }

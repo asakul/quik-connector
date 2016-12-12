@@ -429,7 +429,7 @@ mkQuik dllpath quikpath = do
     orderCallback = orcb',
     tradeCallback = tradecb' }, ())))
 
-  tid <- liftIO (forkIO $ watchdog quikpath state)
+  tid <- liftIO (forkOS $ watchdog quikpath state)
   liftIO $ atomicModifyIORef' state (\s -> (s { watchdogTid = tid }, ()))
   liftIO $ debugM "Quik" "mkQuik done"
   return state
@@ -522,7 +522,7 @@ watchdog quikpath state = do
   tradecb <- tradeCallback <$> readIORef state
 
   alloca (\errorCode ->
-    allocaBytes 1024 (\errorMsg -> do
+    allocaBytes 2048 (\errorMsg -> do
 
       err <- setConnectionStatusCallback api conncb errorCode errorMsg 1024
       if err /= ecSuccess
@@ -544,7 +544,7 @@ watchdog quikpath state = do
                   case res of
                     Left err -> warningM "Quik.Watchdog" $ "Unable to set callbacks: " ++ show err
                     Right _ -> debugM "Quik.Watchdog" "Callbacks are set"))
-          threadDelay 5000000))
+          threadDelay 1000))
 
 throwIfErr :: IO LONG -> ExceptT T.Text IO ()
 throwIfErr action = do

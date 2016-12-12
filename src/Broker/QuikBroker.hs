@@ -62,15 +62,15 @@ messageThread tgCtx chatId msgChan = forever $ do
     Nothing -> threadDelay 500000
 
 
-mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> Maybe (T.Text, T.Text) -> ExceptT T.Text IO BrokerInterface
-mkQuikBroker dllPath quikPath accs tgParams = do
+mkQuikBroker :: Manager -> FilePath -> FilePath -> [T.Text] -> Maybe (T.Text, T.Text) -> ExceptT T.Text IO BrokerInterface
+mkQuikBroker man dllPath quikPath accs tgParams = do
   q <- mkQuik dllPath quikPath
 
   msgChan <- liftIO $ newBoundedChan 100
   msgTid <- liftIO $ case tgParams of
     Nothing -> return Nothing
     Just (tgToken, chatId) -> do
-      tgCtx <- mkTelegramContext tgToken
+      tgCtx <- mkTelegramContext man tgToken
       tid <- forkIO $ messageThread tgCtx chatId msgChan
       return $ Just tid
 

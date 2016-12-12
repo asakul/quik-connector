@@ -10,8 +10,6 @@ module Broker.PaperBroker (
 import Control.DeepSeq
 import Data.Hashable
 import Data.Bits
-import Control.Concurrent.STM
-import Control.Concurrent.STM.TBQueue
 import ATrade.Types
 import Data.IORef
 import qualified Data.HashMap.Strict as M
@@ -21,6 +19,7 @@ import ATrade.Broker.Server
 import Data.Time.Clock
 import Data.Decimal
 import Control.Monad
+import Control.Concurrent.BoundedChan
 import Control.Concurrent hiding (readChan)
 import System.Log.Logger
 
@@ -38,9 +37,9 @@ data PaperBrokerState = PaperBrokerState {
   notificationCallback :: Maybe (Notification -> IO ())
 }
 
-mkPaperBroker :: TBQueue Tick -> Decimal -> [T.Text] -> IO BrokerInterface
+mkPaperBroker :: BoundedChan Tick -> Decimal -> [T.Text] -> IO BrokerInterface
 mkPaperBroker tickChan startCash accounts = do
-  state <- atomically $ newTVar PaperBrokerState {
+  state <- newIORef PaperBrokerState {
     pbTid = Nothing,
     tickMap = M.empty,
     orders = M.empty,
@@ -48,7 +47,7 @@ mkPaperBroker tickChan startCash accounts = do
     notificationCallback = Nothing }
 
   tid <- forkIO $ brokerThread tickChan state
-  atomically $ modifyTVar' state (\s -> s { pbTid = Just tid })
+  atomicModifyIORef' state (\s -> (s { pbTid = Just tid }, ()))
 
   return BrokerInterface {
     accounts = accounts,
@@ -57,18 +56,18 @@ mkPaperBroker tickChan startCash accounts = do
     cancelOrder = pbCancelOrder state,
     stopBroker = pbDestroyBroker state }
 
-brokerThread :: TBQueue Tick -> TVar PaperBrokerState -> IO ()
-brokerThread chan state = forever $ atomically $ do
-    tick <- readTBQueue chan
-    modifyTVar' state (\s -> s { tickMap = M.insert (makeKey tick) tick $! tickMap s })
+brokerThread :: BoundedChan Tick -> IORef PaperBrokerState -> IO ()
+brokerThread chan state = forever $ do
+    tick <- readChan chan
+    atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()))
   where
     makeKey !tick = TickMapKey (security $! tick) (datatype tick)
 
-pbSetNotificationCallback :: TVar PaperBrokerState -> Maybe (Notification -> IO ()) -> IO()
-pbSetNotificationCallback state callback = atomically $ modifyTVar' state (\s -> s { notificationCallback = callback } )
+pbSetNotificationCallback :: IORef PaperBrokerState -> Maybe (Notification -> IO ()) -> IO()
+pbSetNotificationCallback state callback = atomicModifyIORef' state (\s -> (s { notificationCallback = callback }, ()) )
 
 
-pbSubmitOrder :: TVar PaperBrokerState -> Order -> IO ()
+pbSubmitOrder :: IORef PaperBrokerState -> Order -> IO ()
 pbSubmitOrder state order = do
   infoM "PaperBroker" $ "Submitted order: " ++ show order
   case orderPrice order of
@@ -79,14 +78,14 @@ pbSubmitOrder state order = do
 
   where
     executeMarketOrder state order = do
-      tm <- atomically $ tickMap <$> readTVar state
+      tm <- tickMap <$> readIORef state
       case M.lookup key tm of
         Nothing -> let newOrder = order { orderState = OrderError } in
-          atomically $ modifyTVar' state (\s -> s { orders = M.insert (orderId order) newOrder $ orders s })
+          atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()))
 
         Just tick -> let newOrder = order { orderState = Executed }
                          tradeVolume = (realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick) in do
-          atomically $ modifyTVar' state (\s -> s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume})
+          atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()))
           debugM "PaperBroker" $ "Executed: " ++ show newOrder
           ts <- getCurrentTime
           maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
@@ -102,7 +101,7 @@ pbSubmitOrder state order = do
 
     key = TickMapKey (orderSecurity order) (orderDatatype order)
     maybeCall proj state arg = do
-      cb <- atomically $ proj <$> readTVar state
+      cb <- proj <$> readIORef state
       case cb of
         Just callback -> callback arg
         Nothing -> return ()
@@ -121,16 +120,16 @@ pbSubmitOrder state order = do
       tradeSignalId = orderSignalId order }
 
 
-pbCancelOrder :: TVar PaperBrokerState -> OrderId -> IO Bool
+pbCancelOrder :: IORef PaperBrokerState -> OrderId -> IO Bool
 pbCancelOrder state order = undefined
 
-pbDestroyBroker :: TVar PaperBrokerState -> IO ()
+pbDestroyBroker :: IORef PaperBrokerState -> IO ()
 pbDestroyBroker state = do
-  maybeTid <- atomically $ pbTid <$> readTVar state
+  maybeTid <- pbTid <$> readIORef state
   case maybeTid of
     Just tid -> killThread tid
     Nothing -> return ()
 
-pbGetOrder :: TVar PaperBrokerState -> OrderId -> IO (Maybe Order)
-pbGetOrder state oid = atomically $ M.lookup oid . orders <$> readTVar state
+pbGetOrder :: IORef PaperBrokerState -> OrderId -> IO (Maybe Order)
+pbGetOrder state oid = M.lookup oid . orders <$> readIORef state
 
