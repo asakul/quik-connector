@@ -224,7 +224,8 @@ qbTradeCallback state quiktrade = do
   case BM.lookup (qtOrderId quiktrade) idMap >>= flip M.lookup orders of
     Just order -> do
       msgChan <- messageChan <$> readIORef state
-      tryWriteChan msgChan $ TL.toStrict $ format "Trade: {} of {} at {} for account {}" (show (tradeOperation (tradeFor order)), orderSecurity order, qtPrice quiktrade, orderAccountId order)
+      tryWriteChan msgChan $ TL.toStrict $ format "Trade: {} of {} at {} for account {} ({}/{})"
+        (show (tradeOperation (tradeFor order)), orderSecurity order, qtPrice quiktrade, orderAccountId order, (strategyId . orderSignalId) order, (signalName . orderSignalId) order)
       maybeCall notificationCallback state (TradeNotification $ tradeFor order)
     Nothing -> warningM "Quik" $ "Incoming trade for unknown order: " ++ show quiktrade
   where
