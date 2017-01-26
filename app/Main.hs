@@ -26,6 +26,7 @@ import System.Log.Handler.Simple
 import System.Log.Handler (setFormatter)
 import System.Log.Formatter
 import System.ZMQ4
+import System.ZMQ4.ZAP
 
 import Data.Aeson
 import Data.Aeson.Types
@@ -51,6 +52,8 @@ data TableConfig = TableConfig {
 data Config = Config {
   quotesourceEndpoint :: String,
   brokerserverEndpoint :: String,
+  whitelist :: [T.Text],
+  blacklist :: [T.Text],
   tables :: [TableConfig],
   quikPath :: String,
   dllPath :: String,
@@ -71,6 +74,8 @@ parseConfig :: Value -> Parser Config
 parseConfig = withObject "object" $ \obj -> do
   qse <- obj .: "quotesource-endpoint"
   bse <- obj .: "brokerserver-endpoint"
+  whitelist' <- obj .:? "whitelist" .!= []
+  blacklist' <- obj .:? "blacklist" .!= []
   rt <- case HM.lookup "tables" obj of
     Just v -> parseTables v
     Nothing -> fail "Expected tables array"
@@ -82,6 +87,8 @@ parseConfig = withObject "object" $ \obj -> do
   accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
     brokerserverEndpoint = bse,
+    whitelist = whitelist',
+    blacklist = blacklist',
     tables = rt,
     quikPath = qp,
     dllPath = dp,

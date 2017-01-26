@@ -38,7 +38,7 @@ resolver: lts-7.7
 packages:
 - '.'
 - '../libatrade'
-- '../zeromq-haskell'
+- '../zeromq4-haskell-zap'
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps: [ "datetime-0.3.1", "cond-0.4.1.1"]
