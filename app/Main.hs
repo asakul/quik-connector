@@ -7,6 +7,7 @@ import QuoteSource.DataImport
 import Control.Concurrent hiding (readChan, writeChan)
 import Control.Monad
 import Control.Exception
+import Control.Error.Util
 import Control.Monad.IO.Class
 import Data.IORef
 import Graphics.UI.Gtk hiding (Action, backspace)
@@ -21,6 +22,7 @@ import ATrade.Broker.Protocol
 import Broker.PaperBroker
 import Broker.QuikBroker
 
+import System.Directory
 import System.Log.Logger
 import System.Log.Handler.Simple
 import System.Log.Handler (setFormatter)
@@ -34,6 +36,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Text as T
+import Data.Maybe
 
 import Control.Monad.Trans.Except
 import Broker.QuikBroker.Trans2QuikApi
@@ -54,6 +57,8 @@ data Config = Config {
   brokerserverEndpoint :: String,
   whitelist :: [T.Text],
   blacklist :: [T.Text],
+  brokerServerCertPath :: Maybe FilePath,
+  brokerClientCertificateDir :: Maybe FilePath,
   tables :: [TableConfig],
   quikPath :: String,
   dllPath :: String,
@@ -76,6 +81,8 @@ parseConfig = withObject "object" $ \obj -> do
   bse <- obj .: "brokerserver-endpoint"
   whitelist' <- obj .:? "whitelist" .!= []
   blacklist' <- obj .:? "blacklist" .!= []
+  serverCert <- obj .:? "broker_server_certificate"
+  clientCerts <- obj .:? "broker_client_certificates"
   rt <- case HM.lookup "tables" obj of
     Just v -> parseTables v
     Nothing -> fail "Expected tables array"
@@ -89,6 +96,8 @@ parseConfig = withObject "object" $ \obj -> do
     brokerserverEndpoint = bse,
     whitelist = whitelist',
     blacklist = blacklist',
+    brokerServerCertPath = serverCert,
+    brokerClientCertificateDir = clientCerts,
     tables = rt,
     quikPath = qp,
     dllPath = dp,
@@ -156,17 +165,43 @@ main = do
     Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
     Right brokerQ ->
       withContext (\ctx ->
-        bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
-          bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) (tradeSink config)) stopBrokerServer (\broServer -> do
-            void initGUI
-            window <- windowNew
-            window `on` deleteEvent $ do
-              liftIO mainQuit
-              return False
-            widgetShowAll window
-            mainGUI)
-          infoM "main" "BRS down")
-        )
+        withZapHandler ctx (\zap -> do
+          zapSetWhitelist zap $ whitelist config
+          zapSetBlacklist zap $ blacklist config
+
+          case brokerClientCertificateDir config of
+            Just path -> do
+              certs <- loadCertificatesFromDirectory path
+              forM_ certs (\cert -> zapAddClientCertificate zap cert)
+            Nothing -> return ()
+
+          serverCert <- case brokerServerCertPath config of
+            Just certFile -> do
+              eitherCert <- loadCertificateFromFile certFile
+              case eitherCert of
+                Left err -> do
+                  warningM "main" $ "Unable to load server certificate: " ++ err
+                  return Nothing
+                Right cert -> return $ Just cert
+            Nothing -> return Nothing
+          let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
+            sspCertificate = serverCert }
+
+          bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
+            bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) (tradeSink config) serverParams) stopBrokerServer (\broServer -> do
+              void initGUI
+              window <- windowNew
+              window `on` deleteEvent $ do
+                liftIO mainQuit
+                return False
+              widgetShowAll window
+              mainGUI)
+            infoM "main" "BRS down")
+        ))
   killThread forkId
   infoM "main" "Main thread done"
+
+loadCertificatesFromDirectory path = do
+  files <- listDirectory path
+  catMaybes <$> forM files (\file -> hush <$> loadCertificateFromFile file)
 
