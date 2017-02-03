@@ -37,8 +37,21 @@ data PaperBrokerState = PaperBrokerState {
   orders :: M.Map OrderId Order,
   cash :: ! Decimal,
   notificationCallback :: Maybe (Notification -> IO ()),
-  pendingOrders :: [Order]
+  pendingOrders :: [Order],
+
+  fortsClassCodes :: [T.Text],
+  fortsOpenTimeIntervals :: [(DiffTime, DiffTime)],
+
+  auctionableClassCodes :: [T.Text],
+  premarketStartTime :: DiffTime,
+  marketOpenTime :: DiffTime,
+  postMarketStartTime :: DiffTime,
+  postMarketFixTime :: DiffTime,
+  postMarketCloseTime :: DiffTime
 }
+
+hourMin :: Integer -> Integer -> DiffTime
+hourMin h m = fromIntegral $ h * 3600 + m * 60
 
 mkPaperBroker :: BoundedChan Tick -> Decimal -> [T.Text] -> IO BrokerInterface
 mkPaperBroker tickChan startCash accounts = do
@@ -48,7 +61,16 @@ mkPaperBroker tickChan startCash accounts = do
     orders = M.empty,
     cash = startCash,
     notificationCallback = Nothing,
-    pendingOrders = [] }
+    pendingOrders = [],
+    fortsClassCodes = ["SPBFUT", "SPBOPT"],
+    fortsOpenTimeIntervals = [(hourMin 7 0, hourMin 11 0), (hourMin 11 5, hourMin 15 45), (hourMin 16 0, hourMin 20 50)],
+    auctionableClassCodes = ["TQBR"],
+    premarketStartTime = hourMin 6 50,
+    marketOpenTime = hourMin 7 0,
+    postMarketStartTime = hourMin 15 40,
+    postMarketFixTime = hourMin 15 45,
+    postMarketCloseTime = hourMin 15 50
+    }
 
   tid <- forkIO $ brokerThread tickChan state
   atomicModifyIORef' state (\s -> (s { pbTid = Just tid }, ()))
@@ -82,12 +104,12 @@ executePendingOrders tick state = do
         _ -> return Nothing
 
     executeLimitAt price order = case orderOperation order of
-      Buy -> if (datatype tick == Price && price > value tick) || (datatype tick == BestOffer && price > value tick)
+      Buy -> if (datatype tick == Price && price < value tick) || (datatype tick == BestOffer && price < value tick)
         then do
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
         else return Nothing
-      Sell -> if (datatype tick == Price && price < value tick) || (datatype tick == BestBid && price < value tick)
+      Sell -> if (datatype tick == Price && price > value tick) || (datatype tick == BestBid && price > value tick)
         then do
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
