@@ -18,6 +18,7 @@ library
   exposed-modules:     QuoteSource.DataImport
                      , QuoteSource.TableParser
                      , QuoteSource.TableParsers.AllParamsTableParser
+                     , QuoteSource.PipeReader
                      , Broker.PaperBroker
                      , Broker.QuikBroker
                      , Broker.QuikBroker.Trans2QuikApi
@@ -40,7 +41,6 @@ library
                      , BoundedChan
                      , hslogger
                      , zeromq4-haskell
-                     , hashmap
                      , hashable
                      , unordered-containers
                      , aeson
@@ -53,6 +53,7 @@ library
                      , bimap
                      , safe
                      , conduit
+                     , conduit-extra
                      , stm
                      , stm-conduit
                      , http-client
@@ -60,6 +61,10 @@ library
                      , utf8-string
                      , connection
                      , text-format
+                     , monad-loops
+                     , extra
+                     , incremental-parser
+                     , attoparsec
   default-language:    Haskell2010
   extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser
