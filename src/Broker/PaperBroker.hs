@@ -104,12 +104,12 @@ executePendingOrders tick state = do
         _ -> return Nothing
 
     executeLimitAt price order = case orderOperation order of
-      Buy -> if (datatype tick == Price && price < value tick) || (datatype tick == BestOffer && price < value tick)
+      Buy -> if (datatype tick == Price && price > value tick) || (datatype tick == BestOffer && price > value tick)
         then do
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
         else return Nothing
-      Sell -> if (datatype tick == Price && price > value tick) || (datatype tick == BestBid && price > value tick)
+      Sell -> if (datatype tick == Price && price < value tick) || (datatype tick == BestBid && price < value tick)
         then do
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
