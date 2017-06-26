@@ -104,12 +104,12 @@ executePendingOrders tick state = do
         _ -> return Nothing
 
     executeLimitAt price order = case orderOperation order of
-      Buy -> if (datatype tick == Price && price > value tick) || (datatype tick == BestOffer && price > value tick)
+      Buy -> if (datatype tick == Price && price > value tick && value tick > 0) || (datatype tick == BestOffer && price > value tick && value tick > 0)
         then do
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
         else return Nothing
-      Sell -> if (datatype tick == Price && price < value tick) || (datatype tick == BestBid && price < value tick)
+      Sell -> if (datatype tick == Price && price < value tick && value tick > 0) || (datatype tick == BestBid && price < value tick && value tick > 0)
         then do
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
@@ -146,6 +146,12 @@ executeAtTick state order tick = do
   maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
   maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
 
+rejectOrder state order = do
+  let newOrder = order { orderState = Rejected } in
+            atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()))
+  maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
+  maybeCall notificationCallback state $ OrderNotification (orderId order) Rejected
+
 pbSubmitOrder :: IORef PaperBrokerState -> Order -> IO ()
 pbSubmitOrder state order = do
   infoM "PaperBroker" $ "Submitted order: " ++ show order
@@ -159,24 +165,26 @@ pbSubmitOrder state order = do
     executeMarketOrder state order = do
       tm <- tickMap <$> readIORef state
       case M.lookup key tm of
-        Nothing -> let newOrder = order { orderState = OrderError } in
-          atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()))
-
-        Just tick -> executeAtTick state order tick
-    submitLimitOrder price state order = do
-      tm <- tickMap <$> readIORef state
-      case M.lookup key tm of
-        Nothing -> do
-          let newOrder = order { orderState = Submitted }
-          atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()))
-          maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
-        Just tick ->
-          if ((orderOperation order == Buy) && (value tick < price)) || ((orderOperation order == Sell) && (value tick > price))
-            then executeAtTick state order tick
-            else do
-              let newOrder = order { orderState = Submitted }
-              atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , pendingOrders = newOrder : pendingOrders s}, ()))
-              maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
+        Nothing -> rejectOrder state order
+        Just tick -> if orderQuantity order /= 0
+          then executeAtTick state order tick
+          else rejectOrder state order
+    submitLimitOrder price state order = if orderQuantity order == 0
+      then rejectOrder state order
+      else do
+        tm <- tickMap <$> readIORef state
+        case M.lookup key tm of
+          Nothing -> do
+            let newOrder = order { orderState = Submitted }
+            atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()))
+            maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
+          Just tick ->
+            if ((orderOperation order == Buy) && (value tick < price)) || ((orderOperation order == Sell) && (value tick > price))
+              then executeAtTick state order tick
+              else do
+                let newOrder = order { orderState = Submitted }
+                atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , pendingOrders = newOrder : pendingOrders s}, ()))
+                maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
 
     submitStopOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
     submitStopMarketOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order

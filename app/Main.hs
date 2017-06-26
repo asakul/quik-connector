@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, OverloadedLabels #-}
 module Main where
 
 import System.IO
@@ -10,13 +10,16 @@ import Control.Exception
 import Control.Error.Util
 import Control.Monad.IO.Class
 import Data.IORef
-import Graphics.UI.Gtk hiding (Action, backspace)
+import qualified GI.Gtk as Gtk
+import Data.GI.Base
 import Control.Concurrent.BoundedChan
 import ATrade.Types
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
 import ATrade.QuoteSource.Server
 
+import ATrade.Broker.TradeSinks.ZMQTradeSink
+import ATrade.Broker.TradeSinks.TelegramTradeSink
 import ATrade.Broker.Server
 import ATrade.Broker.Protocol
 import Broker.PaperBroker
@@ -158,9 +161,7 @@ main = do
   broker <- mkPaperBroker c1 1000000 ["demo"]
   man <- newManager (mkManagerSettings (TLSSettingsSimple { settingDisableCertificateValidation = True, settingDisableSession = False, settingUseServerName = False }) Nothing)
   infoM "main" "Http manager created"
-  eitherBrokerQ <- runExceptT $ mkQuikBroker man (dllPath config) (quikPath config) (quikAccounts config) (Just (telegramToken config, telegramChatId config))
-  tgCtx <- mkTelegramContext man (telegramToken config)
-  sendMessage tgCtx (telegramChatId config) "Goldmine-Quik connector started"
+  eitherBrokerQ <- runExceptT $ mkQuikBroker man (dllPath config) (quikPath config) (quikAccounts config)
   case eitherBrokerQ of
     Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
     Right brokerQ ->
@@ -187,17 +188,16 @@ main = do
           let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
             sspCertificate = serverCert }
 
-          bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
-            bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) (tradeSink config) serverParams) stopBrokerServer (\broServer -> do
-              void initGUI
-              window <- windowNew
-              window `on` deleteEvent $ do
-                liftIO mainQuit
-                return False
-              widgetShowAll window
-              mainGUI)
-            infoM "main" "BRS down")
-        ))
+          withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink ->
+            withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink ->
+              bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
+                bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\broServer -> do
+                  Gtk.init Nothing
+                  window <- new Gtk.Window [ #title := "Quik connector" ]
+                  on window #destroy Gtk.mainQuit
+                  #showAll window
+                  Gtk.main)
+                infoM "main" "BRS down")))))
   killThread forkId
   infoM "main" "Main thread done"
 

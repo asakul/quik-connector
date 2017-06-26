@@ -40,9 +40,7 @@ data QuikBrokerState = QuikBrokerState {
   orderMap :: M.Map OrderId Order,
   orderIdMap :: BM.Bimap QuikOrderId OrderId,
   trans2orderid :: M.Map Integer Order,
-  transIdCounter :: Integer,
-  messageChan :: BoundedChan T.Text,
-  messageTid :: Maybe ThreadId
+  transIdCounter :: Integer
 }
 
 nextTransId state = atomicModifyIORef' state (\s -> (s { transIdCounter = transIdCounter s + 1 }, transIdCounter s))
@@ -53,26 +51,11 @@ maybeCall proj state arg = do
     Just callback -> callback arg
     Nothing -> return ()
 
-messageThread tgCtx chatId msgChan = forever $ do
-  maybeMsg <- tryReadChan msgChan
-  case maybeMsg of
-    Just msg -> do
-      sendMessage tgCtx chatId msg
-      warningM "Quik.Telegram" $ "Telegram message sent: " ++ T.unpack msg
-    Nothing -> threadDelay 500000
-
-
-mkQuikBroker :: Manager -> FilePath -> FilePath -> [T.Text] -> Maybe (T.Text, T.Text) -> ExceptT T.Text IO BrokerInterface
-mkQuikBroker man dllPath quikPath accs tgParams = do
+mkQuikBroker :: Manager -> FilePath -> FilePath -> [T.Text] -> ExceptT T.Text IO BrokerInterface
+mkQuikBroker man dllPath quikPath accs = do
   q <- mkQuik dllPath quikPath
 
   msgChan <- liftIO $ newBoundedChan 100
-  msgTid <- liftIO $ case tgParams of
-    Nothing -> return Nothing
-    Just (tgToken, chatId) -> do
-      tgCtx <- mkTelegramContext man tgToken
-      tid <- forkIO $ messageThread tgCtx chatId msgChan
-      return $ Just tid
 
   state <- liftIO $ newIORef QuikBrokerState {
     notificationCallback = Nothing,
@@ -80,9 +63,7 @@ mkQuikBroker man dllPath quikPath accs tgParams = do
     orderMap = M.empty,
     orderIdMap = BM.empty,
     trans2orderid = M.empty,
-    transIdCounter = 1,
-    messageChan = msgChan,
-    messageTid = msgTid
+    transIdCounter = 1
   }
 
   setCallbacks q (qbTransactionCallback state) (qbOrderCallback state) (qbTradeCallback state)
@@ -222,11 +203,7 @@ qbTradeCallback state quiktrade = do
   idMap <- orderIdMap <$> readIORef state
   debugM "Quik" $ "Trade: " ++ show quiktrade
   case BM.lookup (qtOrderId quiktrade) idMap >>= flip M.lookup orders of
-    Just order -> do
-      msgChan <- messageChan <$> readIORef state
-      tryWriteChan msgChan $ TL.toStrict $ format "Trade: {} of {} at {} for account {} ({}/{})"
-        (show (tradeOperation (tradeFor order)), orderSecurity order, qtPrice quiktrade, orderAccountId order, (strategyId . orderSignalId) order, (signalName . orderSignalId) order)
-      maybeCall notificationCallback state (TradeNotification $ tradeFor order)
+    Just order -> maybeCall notificationCallback state (TradeNotification $ tradeFor order)
     Nothing -> warningM "Quik" $ "Incoming trade for unknown order: " ++ show quiktrade
   where
     tradeFor order = Trade {
