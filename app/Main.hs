@@ -26,6 +26,7 @@ import Broker.PaperBroker
 import Broker.QuikBroker
 
 import System.Directory
+import System.Timeout
 import System.Log.Logger
 import System.Log.Handler.Simple
 import System.Log.Handler (setFormatter)
@@ -165,7 +166,7 @@ main = do
   case eitherBrokerQ of
     Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
     Right brokerQ ->
-      withContext (\ctx ->
+      withContext (\ctx -> do
         withZapHandler ctx (\zap -> do
           zapSetWhitelist zap $ whitelist config
           zapSetBlacklist zap $ blacklist config
@@ -188,8 +189,8 @@ main = do
           let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
             sspCertificate = serverCert }
 
-          withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink ->
-            withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink ->
+          withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
+            withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
               bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\qsServer -> do
                 bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\broServer -> do
                   Gtk.init Nothing
@@ -197,8 +198,12 @@ main = do
                   on window #destroy Gtk.mainQuit
                   #showAll window
                   Gtk.main)
-                infoM "main" "BRS down")))))
-  killThread forkId
+                infoM "main" "BRS down")
+              debugM "main" "QS done")
+            debugM "main" "TGTS done")
+          debugM "main" "ZMQTS done")
+        debugM "main" "ZAP done")
+  timeout 1000000 $ killThread forkId
   infoM "main" "Main thread done"
 
 loadCertificatesFromDirectory path = do

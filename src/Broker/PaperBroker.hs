@@ -141,7 +141,7 @@ executeAtTick state order tick = do
   let newOrder = order { orderState = Executed }
   let tradeVolume = realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick
   atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()))
-  debugM "PaperBroker" $ "Executed: " ++ show newOrder
+  debugM "PaperBroker" $ "Executed: " ++ show newOrder ++ "; at tick: " ++ show tick
   ts <- getCurrentTime
   maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
   maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
