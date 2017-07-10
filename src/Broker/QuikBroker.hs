@@ -28,8 +28,6 @@ import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
 import System.Log.Logger
 
-import Network.Telegram
-
 import Safe
 
 type QuikOrderId = Integer
@@ -51,8 +49,8 @@ maybeCall proj state arg = do
     Just callback -> callback arg
     Nothing -> return ()
 
-mkQuikBroker :: Manager -> FilePath -> FilePath -> [T.Text] -> ExceptT T.Text IO BrokerInterface
-mkQuikBroker man dllPath quikPath accs = do
+mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> ExceptT T.Text IO BrokerInterface
+mkQuikBroker dllPath quikPath accs = do
   q <- mkQuik dllPath quikPath
 
   msgChan <- liftIO $ newBoundedChan 100

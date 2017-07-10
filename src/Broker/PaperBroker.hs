@@ -96,21 +96,28 @@ executePendingOrders tick state = do
   atomicModifyIORef' state (\s -> (s { pendingOrders = L.filter (\order -> orderId order `L.notElem` executedIds) (pendingOrders s)}, ()))
   where
     execute order =
-      case orderPrice order of
-        Market -> do
-          executeAtTick state order tick
-          return $ Just $ orderId order
-        Limit price -> executeLimitAt price order
-        _ -> return Nothing
+      if security tick == orderSecurity order
+        then
+          case orderPrice order of
+            Market -> do
+              debugM "PaperBroker" "Executing: pending market order"
+              executeAtTick state order tick
+              return $ Just $ orderId order
+            Limit price -> do
+              executeLimitAt price order
+            _ -> return Nothing
+        else return Nothing
 
     executeLimitAt price order = case orderOperation order of
       Buy -> if (datatype tick == Price && price > value tick && value tick > 0) || (datatype tick == BestOffer && price > value tick && value tick > 0)
         then do
+          debugM "PaperBroker" $ "[1]Executing: pending limit order: " ++ show (security tick) ++ "/" ++ show (orderSecurity order)
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
         else return Nothing
       Sell -> if (datatype tick == Price && price < value tick && value tick > 0) || (datatype tick == BestBid && price < value tick && value tick > 0)
         then do
+          debugM "PaperBroker" $ "[2]Executing: pending limit order: " ++ show (security tick) ++ "/" ++ show (orderSecurity order)
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
         else return Nothing
@@ -173,6 +180,7 @@ pbSubmitOrder state order = do
       then rejectOrder state order
       else do
         tm <- tickMap <$> readIORef state
+        debugM "PaperBroker" $ "Limit order submitted, looking up: " ++ show key
         case M.lookup key tm of
           Nothing -> do
             let newOrder = order { orderState = Submitted }
@@ -180,7 +188,9 @@ pbSubmitOrder state order = do
             maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
           Just tick ->
             if ((orderOperation order == Buy) && (value tick < price)) || ((orderOperation order == Sell) && (value tick > price))
-              then executeAtTick state order tick
+              then do
+                maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
+                executeAtTick state order tick
               else do
                 let newOrder = order { orderState = Submitted }
                 atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , pendingOrders = newOrder : pendingOrders s}, ()))
