@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module Broker.QuikBroker.Trans2QuikApi (
   Trans2QuikApi(..),
@@ -22,13 +23,22 @@ import Control.Monad.IO.Class
 import System.Win32.DLL
 import System.Win32.Types
 import Control.Concurrent
+import Control.Exception.Safe
 import Data.IORef
 import Data.Time.Clock
 import Data.Time.Calendar
 import Data.Ratio
+import Data.Typeable
 import qualified Data.Set as S
 import qualified Data.Text as T
 import System.Log.Logger
+
+type QuikErrorCode = LONG
+
+data QuikException = QuikException T.Text QuikErrorCode
+  deriving (Show, Eq, Typeable)
+
+instance Exception QuikException
 
 ecSuccess = 0
 ecFailed = 1
@@ -396,22 +406,21 @@ quikSendTransaction state transactionString = do
           else return $ Right ())))
   
 
-setCallbacks :: IORef Quik -> HlTransactionCallback -> HlOrderCallback -> HlTradeCallback -> ExceptT T.Text IO ()
-setCallbacks quik transCb orCb tradeCb =
-  liftIO $ atomicModifyIORef' quik (\s ->
+setCallbacks :: IORef Quik -> HlTransactionCallback -> HlOrderCallback -> HlTradeCallback -> IO ()
+setCallbacks quik transCb orCb tradeCb = atomicModifyIORef' quik (\s ->
     ( s { hlTransactionCallback = Just transCb,
       hlOrderCallback = Just orCb,
       hlTradeCallback = Just tradeCb }, ()))
   
 
-mkQuik :: FilePath -> FilePath -> ExceptT T.Text IO (IORef Quik)
+mkQuik :: FilePath -> FilePath -> IO (IORef Quik)
 mkQuik dllpath quikpath = do
   api <- loadQuikApi dllpath
   
-  liftIO $ debugM "Quik" "Dll loaded"
+  debugM "Quik" "Dll loaded"
 
-  myTid <- liftIO myThreadId
-  state <- liftIO $ newIORef Quik { quikApi = api,
+  myTid <- myThreadId
+  state <- newIORef Quik { quikApi = api,
     connectedToServer = False,
     connectedToDll = False,
     watchdogTid = myTid,
@@ -421,19 +430,19 @@ mkQuik dllpath quikpath = do
     handledTrades = S.empty,
     handledOrders = S.empty }
 
-  conncb' <- liftIO (mkConnectionStatusCallback (defaultConnectionCb state))
-  transcb' <- liftIO (mkTransactionsReplyCallback (defaultTransactionReplyCb state))
-  orcb' <- liftIO (mkOrderStatusCallback (defaultOrderCb state))
-  tradecb' <- liftIO (mkTradeStatusCallback (defaultTradeCb state))
+  conncb' <- mkConnectionStatusCallback (defaultConnectionCb state)
+  transcb' <- mkTransactionsReplyCallback (defaultTransactionReplyCb state)
+  orcb' <- mkOrderStatusCallback (defaultOrderCb state)
+  tradecb' <- mkTradeStatusCallback (defaultTradeCb state)
 
-  liftIO (atomicModifyIORef' state (\s -> (s { connectionCallback = conncb',
+  atomicModifyIORef' state (\s -> (s { connectionCallback = conncb',
     transactionCallback = transcb',
     orderCallback = orcb',
-    tradeCallback = tradecb' }, ())))
+    tradeCallback = tradecb' }, ()))
 
-  tid <- liftIO (forkIO $ watchdog quikpath state)
-  liftIO $ atomicModifyIORef' state (\s -> (s { watchdogTid = tid }, ()))
-  liftIO $ debugM "Quik" "mkQuik done"
+  tid <- forkIO $ watchdog quikpath state
+  atomicModifyIORef' state (\s -> (s { watchdogTid = tid }, ()))
+  debugM "Quik" "mkQuik done"
   return state
 
 defaultConnectionCb :: IORef Quik -> LONG -> LONG -> LPSTR -> IO ()
@@ -533,31 +542,29 @@ watchdog quikpath state = do
         then warningM "Quik.Watchdog" $ "Error: " ++ show err
         else forever $ do
           conn <- connectedToDll <$> readIORef state
-          unless conn $
-            withCString quikpath (\path -> do
-              err <- connect api path errorCode errorMsg 1024
-              if err /= ecSuccess && err /= ecAlreadyConnectedToQuik
-                then warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err
-                else withCString "" (\emptyStr -> do
-                  res <- (runExceptT $ do
-                    throwIfErr $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
-                    throwIfErr $ subscribeOrders api emptyStr emptyStr
-                    liftIO $ startOrders api orcb
-                    throwIfErr $ subscribeTrades api emptyStr emptyStr
-                    liftIO $ startTrades api tradecb)
-                  case res of
-                    Left err -> warningM "Quik.Watchdog" $ "Unable to set callbacks: " ++ show err
-                    Right _ -> debugM "Quik.Watchdog" "Callbacks are set"))
+          handle
+            (\(QuikException errmsg rc) -> warningM "Quik.Watchdog" $ (T.unpack errmsg) ++ " (" ++ show rc ++ ")") $
+            unless conn $
+              withCString quikpath (\path -> do
+                err <- connect api path errorCode errorMsg 1024
+                if err /= ecSuccess && err /= ecAlreadyConnectedToQuik
+                  then warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err
+                  else withCString "" (\emptyStr -> do
+                    throwIfErr "setTransactionsReplyCallback returned error" $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
+                    throwIfErr "subscribeOrders returned error"  $ subscribeOrders api emptyStr emptyStr
+                    startOrders api orcb
+                    throwIfErr "subscribeTrades returned error"  $ subscribeTrades api emptyStr emptyStr
+                    startTrades api tradecb))
           threadDelay 10000000))
 
-throwIfErr :: IO LONG -> ExceptT T.Text IO ()
-throwIfErr action = do
-  rc <- liftIO action
+throwIfErr :: T.Text -> IO LONG -> IO ()
+throwIfErr errmsg action = do
+  rc <- action
   if rc /= ecSuccess
-    then throwE "Error"
+    then throw $ QuikException errmsg rc
     else return ()
 
-loadQuikApi :: FilePath -> ExceptT T.Text IO Trans2QuikApi
+loadQuikApi :: FilePath -> IO Trans2QuikApi
 loadQuikApi path = do
   dll <- castPtr <$> liftIO (loadLibrary path)
   dll `orFail` "Unable to load Trans2quik.dll"
@@ -668,14 +675,14 @@ loadQuikApi path = do
   }
 
   where
-    orFail :: Ptr p -> T.Text -> ExceptT T.Text IO (Ptr p)
+    orFail :: Ptr p -> T.Text -> IO (Ptr p)
     orFail myPtr t = if nullPtr == myPtr
-        then throwE t
+        then throw $ QuikException t ecFailed
         else return myPtr
 
-    tryLoad :: HMODULE -> String -> ExceptT T.Text IO (FunPtr a)
+    tryLoad :: HMODULE -> String -> IO (FunPtr a)
     tryLoad dll proc = do
-      p <- liftIO (getProcAddress' dll proc)
+      p <- getProcAddress' dll proc
       p `orFail` ("Unable to load symbol: " `T.append` T.pack proc)
       return $ castPtrToFunPtr p
 

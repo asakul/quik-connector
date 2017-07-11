@@ -34,8 +34,6 @@ import System.ZMQ4.ZAP
 import qualified Data.Text as T
 import Data.Maybe
 
-import Control.Monad.Trans.Except
-
 import Config
 
 forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan QuoteSourceServerData)
@@ -73,48 +71,45 @@ main = do
 
   (forkId, c1, c2) <- forkBoundedChan 10000 chan
 
-  broker <- mkPaperBroker c1 1000000 ["demo"]
-  eitherBrokerQ <- runExceptT $ mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config)
-  case eitherBrokerQ of
-    Left errmsg -> warningM "main" $ "Can't load quik broker: " ++ T.unpack errmsg
-    Right brokerQ ->
-      withContext (\ctx -> do
-        withZapHandler ctx (\zap -> do
-          zapSetWhitelist zap $ whitelist config
-          zapSetBlacklist zap $ blacklist config
+  brokerP <- mkPaperBroker c1 1000000 ["demo"]
+  brokerQ <- mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config)
+  withContext (\ctx -> do
+    withZapHandler ctx (\zap -> do
+      zapSetWhitelist zap $ whitelist config
+      zapSetBlacklist zap $ blacklist config
 
-          case brokerClientCertificateDir config of
-            Just certFile -> do
-              certs <- loadCertificatesFromDirectory certFile
-              forM_ certs (\cert -> zapAddClientCertificate zap cert)
-            Nothing -> return ()
+      case brokerClientCertificateDir config of
+        Just certFile -> do
+          certs <- loadCertificatesFromDirectory certFile
+          forM_ certs (\cert -> zapAddClientCertificate zap cert)
+        Nothing -> return ()
 
-          serverCert <- case brokerServerCertPath config of
-            Just certFile -> do
-              eitherCert <- loadCertificateFromFile certFile
-              case eitherCert of
-                Left errorMessage -> do
-                  warningM "main" $ "Unable to load server certificate: " ++ errorMessage
-                  return Nothing
-                Right cert -> return $ Just cert
-            Nothing -> return Nothing
-          let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
-            sspCertificate = serverCert }
+      serverCert <- case brokerServerCertPath config of
+        Just certFile -> do
+          eitherCert <- loadCertificateFromFile certFile
+          case eitherCert of
+            Left errorMessage -> do
+              warningM "main" $ "Unable to load server certificate: " ++ errorMessage
+              return Nothing
+            Right cert -> return $ Just cert
+        Nothing -> return Nothing
+      let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
+        sspCertificate = serverCert }
 
-          withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
-            withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
-              bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\_ -> do
-                bracket (startBrokerServer [broker, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
-                  void $ Gtk.init Nothing
-                  window <- new Gtk.Window [ #title := "Quik connector" ]
-                  void $ on window #destroy Gtk.mainQuit
-                  #showAll window
-                  Gtk.main)
-                infoM "main" "BRS down")
-              debugM "main" "QS done")
-            debugM "main" "TGTS done")
-          debugM "main" "ZMQTS done")
-        debugM "main" "ZAP done")
+      withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
+        withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
+          bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\_ -> do
+            bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
+              void $ Gtk.init Nothing
+              window <- new Gtk.Window [ #title := "Quik connector" ]
+              void $ on window #destroy Gtk.mainQuit
+              #showAll window
+              Gtk.main)
+            infoM "main" "BRS down")
+          debugM "main" "QS done")
+        debugM "main" "TGTS done")
+      debugM "main" "ZMQTS done")
+    debugM "main" "ZAP done")
   void $ timeout 1000000 $ killThread forkId
   infoM "main" "Main thread done"
 

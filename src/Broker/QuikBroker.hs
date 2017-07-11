@@ -49,13 +49,13 @@ maybeCall proj state arg = do
     Just callback -> callback arg
     Nothing -> return ()
 
-mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> ExceptT T.Text IO BrokerInterface
+mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> IO BrokerInterface
 mkQuikBroker dllPath quikPath accs = do
   q <- mkQuik dllPath quikPath
 
-  msgChan <- liftIO $ newBoundedChan 100
+  msgChan <- newBoundedChan 100
 
-  state <- liftIO $ newIORef QuikBrokerState {
+  state <- newIORef QuikBrokerState {
     notificationCallback = Nothing,
     quik = q,
     orderMap = M.empty,
