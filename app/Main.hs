@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, OverloadedLabels #-}
+{-# LANGUAGE OverloadedStrings, OverloadedLabels, LambdaCase #-}
 module Main where
 
 import System.IO
@@ -6,7 +6,7 @@ import System.IO
 import QuoteSource.DataImport
 import Control.Concurrent hiding (readChan, writeChan)
 import Control.Monad
-import Control.Exception
+import Control.Exception.Safe
 import Control.Error.Util
 import qualified GI.Gtk as Gtk
 import Data.GI.Base
@@ -14,6 +14,7 @@ import Control.Concurrent.BoundedChan
 import ATrade.Types
 import QuoteSource.TableParsers.AllParamsTableParser
 import QuoteSource.TableParser
+import QuoteSource.PipeReader
 import ATrade.QuoteSource.Server
 
 import ATrade.Broker.TradeSinks.ZMQTradeSink
@@ -96,22 +97,32 @@ main = do
       let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
         sspCertificate = serverCert }
 
-      withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
-        withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
-          bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\_ -> do
-            bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
-              void $ Gtk.init Nothing
-              window <- new Gtk.Window [ #title := "Quik connector" ]
-              void $ on window #destroy Gtk.mainQuit
-              #showAll window
-              Gtk.main)
-            infoM "main" "BRS down")
-          debugM "main" "QS done")
-        debugM "main" "TGTS done")
-      debugM "main" "ZMQTS done")
-    debugM "main" "ZAP done")
+      bracket (forkIO $ pipeReaderThread ctx config) killThread (\_ -> do
+        withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
+          withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
+            bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\_ -> do
+              bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
+                void $ Gtk.init Nothing
+                window <- new Gtk.Window [ #title := "Quik connector" ]
+                void $ on window #destroy Gtk.mainQuit
+                #showAll window
+                Gtk.main)
+              infoM "main" "BRS down")
+            debugM "main" "QS done")
+          debugM "main" "TGTS done")
+        debugM "main" "ZMQTS done")
+      debugM "main" "ZAP done"))
   void $ timeout 1000000 $ killThread forkId
   infoM "main" "Main thread done"
+  where
+    pipeReaderThread ctx config =
+      case (tickPipePath config, pipeReaderQsEndpoint config) of
+        (Just pipe, Just qsep) -> do
+          tickChan <- newBoundedChan 10000
+          bracket (startPipeReader (T.pack pipe) tickChan) stopPipeReader (\_ -> do
+            bracket (startQuoteSourceServer tickChan ctx (T.pack qsep)) stopQuoteSourceServer (\_ -> threadDelay 1000000))
+        _ -> return ()
+      
 
 loadCertificatesFromDirectory :: FilePath -> IO [CurveCertificate]
 loadCertificatesFromDirectory filepath = do

@@ -10,7 +10,6 @@ import Data.IORef
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.HashSet as HS
-import Data.Decimal
 import Data.Time.Clock
 import Data.Time.Calendar
 import ATrade.Types
@@ -33,8 +32,7 @@ import Data.Attoparsec.Text
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.Conduit.Attoparsec
-
-fromDouble = realFracToDecimal 10
+import ATrade.QuoteSource.Server
 
 data PipeReaderHandle =
   PipeReaderHandle {
@@ -82,18 +80,18 @@ line2TickConduit = do
           m <- liftIO $ readIORef volumeMap
           case M.lookup tickerId m of
             Just vol ->
-              if | vol < voltoday -> yieldTick tickerId Price ts (fromDouble last) (voltoday - vol)
-                 | vol > voltoday -> yieldTick tickerId Price ts (fromDouble last) vol
+              if | vol < voltoday -> yieldTick tickerId LastTradePrice ts (fromDouble last) (voltoday - vol)
+                 | vol > voltoday -> yieldTick tickerId LastTradePrice ts (fromDouble last) vol
                  | otherwise -> return ()
-            Nothing -> yieldTick tickerId Price ts (fromDouble last) 1
+            Nothing -> yieldTick tickerId LastTradePrice ts (fromDouble last) 1
 
           liftIO $ atomicModifyIORef' volumeMap (\m -> (M.insert tickerId voltoday m, ()))
 
       AllTradeLine tickerId flags price volume ts -> do
         liftIO $ writeIORef lastTimestamp ts
         if
-           | flags == 1 -> yieldTick tickerId Price ts (fromDouble price) (-volume)
-           | flags == 2 -> yieldTick tickerId Price ts (fromDouble price) volume
+           | flags == 1 -> yieldTick tickerId LastTradePrice ts (fromDouble price) (-volume)
+           | flags == 2 -> yieldTick tickerId LastTradePrice ts (fromDouble price) volume
            | otherwise  -> return ()
         liftIO $ atomicModifyIORef' ignoreCPSet (\s -> (HS.insert tickerId s, ()))
         
@@ -105,10 +103,10 @@ line2TickConduit = do
                      value = val,
                      volume = vol }
        
-chanSink :: BoundedChan a -> Sink a IO ()
-chanSink chan = awaitForever (\t -> liftIO $ writeChan chan t)
+chanSink :: BoundedChan QuoteSourceServerData -> Sink Tick IO ()
+chanSink chan = awaitForever (\t -> liftIO $ writeChan chan (QSSTick t))
 
-startPipeReader :: T.Text -> BoundedChan Tick -> IO PipeReaderHandle
+startPipeReader :: T.Text -> BoundedChan QuoteSourceServerData -> IO PipeReaderHandle
 startPipeReader pipeName tickChan = do
   f <- createFile (T.unpack pipeName) gENERIC_READ 0 Nothing oPEN_EXISTING 0 Nothing
   when (f == iNVALID_HANDLE_VALUE) $ error $ "Unable to open pipe: " ++ T.unpack pipeName

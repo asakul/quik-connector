@@ -7,10 +7,9 @@ module QuoteSource.TableParsers.AllParamsTableParser (
 
 import qualified Data.Map.Strict as M
 import QuoteSource.TableParser
-import ATrade.Types
+import ATrade.Types as AT
 import System.Win32.XlParser
 import Data.Tuple
-import Data.Decimal
 import Control.Monad.State.Strict
 import Control.DeepSeq
 import Data.Time.Clock
@@ -43,7 +42,7 @@ columnCodes = M.fromList [
 
 columnToDataType :: TableColumn -> DataType
 columnToDataType x 
-  | x == CPrice = Price
+  | x == CPrice = LastTradePrice
   | x == CBestBid = BestBid
   | x == CBestAsk = BestOffer
   | x == CTotalSupply = TotalSupply
@@ -106,7 +105,7 @@ parseWithSchema sch (width, height, cells) = do
               security = force $ securityName classCode ticker,
               datatype = columnToDataType columnType,
               timestamp = ts,
-              value = force $ realFracToDecimal 10 value,
+              value = fromDouble value,
               volume = 0 }
           _ -> return Nothing
 
@@ -121,9 +120,9 @@ parseWithSchema sch (width, height, cells) = do
                 ts <- gets timestampHint
                 return $ Just Tick {
                   security = force $ securityName classCode ticker,
-                  datatype = Price,
+                  datatype = LastTradePrice,
                   timestamp = ts,
-                  value = force $ realFracToDecimal 10 value,
+                  value = fromDouble value,
                   volume = tickVolume}
               else
                 return Nothing

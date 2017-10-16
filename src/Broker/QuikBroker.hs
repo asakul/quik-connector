@@ -11,7 +11,6 @@ import ATrade.Broker.Server
 
 import Broker.QuikBroker.Trans2QuikApi hiding (tradeAccount)
 
-import Data.Decimal
 import Data.IORef
 import Data.List.Split
 import qualified Data.List as L
@@ -206,9 +205,9 @@ qbTradeCallback state quiktrade = do
   where
     tradeFor order = Trade {
       tradeOrderId = orderId order,
-      tradePrice = realFracToDecimal 10 $ qtPrice quiktrade,
+      tradePrice = fromDouble $ qtPrice quiktrade,
       tradeQuantity = qtQuantity quiktrade,
-      tradeVolume = realFracToDecimal 10 $ qtVolume quiktrade,
+      tradeVolume = fromDouble $ qtVolume quiktrade,
       tradeVolumeCurrency = T.pack $ qtVolumeCurrency quiktrade,
       tradeOperation = if qtSell quiktrade then Sell else Buy,
       tradeAccount = orderAccountId order,

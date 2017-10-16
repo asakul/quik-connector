@@ -22,6 +22,8 @@ data TableConfig = TableConfig {
 
 data Config = Config {
   quotesourceEndpoint :: String,
+  pipeReaderQsEndpoint :: Maybe String,
+  tickPipePath :: Maybe String,
   brokerserverEndpoint :: String,
   whitelist :: [T.Text],
   blacklist :: [T.Text],
@@ -46,6 +48,8 @@ readConfig fname = do
 parseConfig :: Value -> Parser Config
 parseConfig = withObject "object" $ \obj -> do
   qse <- obj .: "quotesource-endpoint"
+  qsePipe <- obj .:? "quotesource-endpoint-pipe-reader"
+  pipePath <- obj .:? "pipe-reader-path"
   bse <- obj .: "brokerserver-endpoint"
   whitelist' <- obj .:? "whitelist" .!= []
   blacklist' <- obj .:? "blacklist" .!= []
@@ -61,6 +65,8 @@ parseConfig = withObject "object" $ \obj -> do
   tgChatId <- obj .: "telegram-chatid"
   accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
+    pipeReaderQsEndpoint = qsePipe,
+    tickPipePath = pipePath,
     brokerserverEndpoint = bse,
     whitelist = whitelist',
     blacklist = blacklist',

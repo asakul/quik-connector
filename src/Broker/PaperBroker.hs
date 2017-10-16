@@ -18,7 +18,6 @@ import qualified Data.Text as T
 import ATrade.Broker.Protocol
 import ATrade.Broker.Server
 import Data.Time.Clock
-import Data.Decimal
 import Data.Maybe
 import Control.Monad
 import Control.Concurrent.BoundedChan
@@ -35,7 +34,7 @@ data PaperBrokerState = PaperBrokerState {
   pbTid :: Maybe ThreadId,
   tickMap :: M.Map TickMapKey Tick,
   orders :: M.Map OrderId Order,
-  cash :: ! Decimal,
+  cash :: !Price,
   notificationCallback :: Maybe (Notification -> IO ()),
   pendingOrders :: [Order],
 
@@ -53,7 +52,7 @@ data PaperBrokerState = PaperBrokerState {
 hourMin :: Integer -> Integer -> DiffTime
 hourMin h m = fromIntegral $ h * 3600 + m * 60
 
-mkPaperBroker :: BoundedChan Tick -> Decimal -> [T.Text] -> IO BrokerInterface
+mkPaperBroker :: BoundedChan Tick -> Price -> [T.Text] -> IO BrokerInterface
 mkPaperBroker tickChan startCash accounts = do
   state <- newIORef PaperBrokerState {
     pbTid = Nothing,
@@ -109,13 +108,13 @@ executePendingOrders tick state = do
         else return Nothing
 
     executeLimitAt price order = case orderOperation order of
-      Buy -> if (datatype tick == Price && price > value tick && value tick > 0) || (datatype tick == BestOffer && price > value tick && value tick > 0)
+      Buy -> if (datatype tick == LastTradePrice && price > value tick && value tick > 0) || (datatype tick == BestOffer && price > value tick && value tick > 0)
         then do
           debugM "PaperBroker" $ "[1]Executing: pending limit order: " ++ show (security tick) ++ "/" ++ show (orderSecurity order)
           executeAtTick state order $ tick { value = price }
           return $ Just $ orderId order
         else return Nothing
-      Sell -> if (datatype tick == Price && price < value tick && value tick > 0) || (datatype tick == BestBid && price < value tick && value tick > 0)
+      Sell -> if (datatype tick == LastTradePrice && price < value tick && value tick > 0) || (datatype tick == BestBid && price < value tick && value tick > 0)
         then do
           debugM "PaperBroker" $ "[2]Executing: pending limit order: " ++ show (security tick) ++ "/" ++ show (orderSecurity order)
           executeAtTick state order $ tick { value = price }
@@ -130,7 +129,7 @@ mkTrade tick order timestamp = Trade {
   tradeOrderId = orderId order,
   tradePrice = value tick,
   tradeQuantity = orderQuantity order,
-  tradeVolume = realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick,
+  tradeVolume = fromInteger (orderQuantity order) * value tick,
   tradeVolumeCurrency = "TEST",
   tradeOperation = orderOperation order,
   tradeAccount = orderAccountId order,
@@ -146,7 +145,7 @@ maybeCall proj state arg = do
 
 executeAtTick state order tick = do
   let newOrder = order { orderState = Executed }
-  let tradeVolume = realFracToDecimal 10 (fromIntegral $ orderQuantity order) * value tick
+  let tradeVolume = fromInteger (orderQuantity order) * value tick
   atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()))
   debugM "PaperBroker" $ "Executed: " ++ show newOrder ++ "; at tick: " ++ show tick
   ts <- getCurrentTime
