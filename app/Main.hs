@@ -72,9 +72,9 @@ main = do
 
   (forkId, c1, c2) <- forkBoundedChan 10000 chan
 
-  brokerP <- mkPaperBroker c1 1000000 ["demo"]
   brokerQ <- mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config)
   withContext (\ctx -> do
+    brokerP <- mkPaperBroker ctx (T.pack $ qtisEndpoint config) c1 1000000 ["demo"]
     withZapHandler ctx (\zap -> do
       zapSetWhitelist zap $ whitelist config
       zapSetBlacklist zap $ blacklist config

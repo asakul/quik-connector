@@ -23,6 +23,8 @@ import Control.Monad
 import Control.Concurrent.BoundedChan
 import Control.Concurrent hiding (readChan)
 import System.Log.Logger
+import ATrade.Quotes.QTIS
+import System.ZMQ4
 
 data TickMapKey = TickMapKey !T.Text !DataType
   deriving (Show, Eq, Ord)
@@ -30,9 +32,12 @@ data TickMapKey = TickMapKey !T.Text !DataType
 instance Hashable TickMapKey where
   hashWithSalt salt (TickMapKey s dt) = hashWithSalt salt s `xor` hashWithSalt salt (fromEnum dt)
 
+data QTISResult = Fetching | Done TickerInfo
+
 data PaperBrokerState = PaperBrokerState {
   pbTid :: Maybe ThreadId,
   tickMap :: M.Map TickMapKey Tick,
+  tickerInfoMap :: M.Map TickerId QTISResult,
   orders :: M.Map OrderId Order,
   cash :: !Price,
   notificationCallback :: Maybe (Notification -> IO ()),
@@ -52,11 +57,12 @@ data PaperBrokerState = PaperBrokerState {
 hourMin :: Integer -> Integer -> DiffTime
 hourMin h m = fromIntegral $ h * 3600 + m * 60
 
-mkPaperBroker :: BoundedChan Tick -> Price -> [T.Text] -> IO BrokerInterface
-mkPaperBroker tickChan startCash accounts = do
+mkPaperBroker :: Context -> T.Text -> BoundedChan Tick -> Price -> [T.Text] -> IO BrokerInterface
+mkPaperBroker ctx qtisEp tickChan startCash accounts = do
   state <- newIORef PaperBrokerState {
     pbTid = Nothing,
     tickMap = M.empty,
+    tickerInfoMap = M.empty,
     orders = M.empty,
     cash = startCash,
     notificationCallback = Nothing,
@@ -71,7 +77,7 @@ mkPaperBroker tickChan startCash accounts = do
     postMarketCloseTime = hourMin 15 50
     }
 
-  tid <- forkIO $ brokerThread tickChan state
+  tid <- forkIO $ brokerThread ctx qtisEp tickChan state
   atomicModifyIORef' state (\s -> (s { pbTid = Just tid }, ()))
 
   return BrokerInterface {
@@ -81,9 +87,17 @@ mkPaperBroker tickChan startCash accounts = do
     cancelOrder = pbCancelOrder state,
     stopBroker = pbDestroyBroker state }
 
-brokerThread :: BoundedChan Tick -> IORef PaperBrokerState -> IO ()
-brokerThread chan state = forever $ do
+brokerThread :: Context -> T.Text -> BoundedChan Tick -> IORef PaperBrokerState -> IO ()
+brokerThread ctx qtisEp chan state = forever $ do
     tick <- readChan chan
+    when (datatype tick == LastTradePrice) $ do
+      info <- M.lookup (security tick) . tickerInfoMap <$> readIORef state
+      when (isNothing info) $ do
+        atomicModifyIORef' state (\s -> (s { tickerInfoMap = M.insert (security tick) Fetching $! tickerInfoMap s }, ()))
+        void $ forkIO $ do
+          ti <- qtisGetTickersInfo ctx qtisEp [security tick]
+          forM_ ti (\newInfo -> atomicModifyIORef' state (\s -> (s { tickerInfoMap = M.insert (security tick) (Done newInfo) $! tickerInfoMap s }, ())))
+
     atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()))
     executePendingOrders tick state
   where
@@ -124,12 +138,12 @@ executePendingOrders tick state = do
 pbSetNotificationCallback :: IORef PaperBrokerState -> Maybe (Notification -> IO ()) -> IO()
 pbSetNotificationCallback state callback = atomicModifyIORef' state (\s -> (s { notificationCallback = callback }, ()) )
 
-mkTrade :: Tick -> Order -> UTCTime -> Trade
-mkTrade tick order timestamp = Trade {
+mkTrade :: TickerInfo -> Tick -> Order -> UTCTime -> Trade
+mkTrade info tick order timestamp = Trade {
   tradeOrderId = orderId order,
   tradePrice = value tick,
   tradeQuantity = orderQuantity order,
-  tradeVolume = fromInteger (orderQuantity order) * value tick,
+  tradeVolume = fromInteger (orderQuantity order) * value tick * fromInteger (tiLotSize info),
   tradeVolumeCurrency = "TEST",
   tradeOperation = orderOperation order,
   tradeAccount = orderAccountId order,
@@ -145,12 +159,21 @@ maybeCall proj state arg = do
 
 executeAtTick state order tick = do
   let newOrder = order { orderState = Executed }
-  let tradeVolume = fromInteger (orderQuantity order) * value tick
+  tickerInfo <- obtainTickerInfo (security tick)
+  let tradeVolume = fromInteger (orderQuantity order) * value tick * fromInteger (tiLotSize tickerInfo)
   atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()))
   debugM "PaperBroker" $ "Executed: " ++ show newOrder ++ "; at tick: " ++ show tick
   ts <- getCurrentTime
-  maybeCall notificationCallback state $ TradeNotification $ mkTrade tick order ts
+  maybeCall notificationCallback state $ TradeNotification $ mkTrade tickerInfo tick order ts
   maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
+  where
+    obtainTickerInfo tickerId = do
+      mInfo <- M.lookup tickerId . tickerInfoMap <$> readIORef state
+      case mInfo of
+        Just (Done info) -> return info
+        _ -> return TickerInfo { tiTicker = tickerId,
+          tiLotSize = 1,
+          tiTickSize = 1 }
 
 rejectOrder state order = do
   let newOrder = order { orderState = Rejected } in

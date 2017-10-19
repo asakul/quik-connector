@@ -23,6 +23,7 @@ library
                      , Broker.QuikBroker
                      , Broker.QuikBroker.Trans2QuikApi
                      , Network.Telegram
+                     , ATrade.Quotes.QTIS
   ghc-options:         -Wall -Wunsupported-calling-conventions
   build-depends:       base >= 4.7 && < 5
                      , Win32
