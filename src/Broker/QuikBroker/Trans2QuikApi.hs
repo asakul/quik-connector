@@ -29,9 +29,13 @@ import Data.Time.Clock
 import Data.Time.Calendar
 import Data.Ratio
 import Data.Typeable
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Data.Text.Encoding
 import System.Log.Logger
+import Codec.Text.IConv
 
 type QuikErrorCode = LONG
 
@@ -456,6 +460,12 @@ defaultConnectionCb state event errorCode infoMessage
 defaultTransactionReplyCb :: IORef Quik -> LONG -> LONG -> LONG -> DWORD -> CLLong -> LPSTR -> CIntPtr -> IO ()
 defaultTransactionReplyCb state transactionResult errorCode replyCode transId orderNum replyMessage replyDesc = do
   debugM "Quik" $ "Transaction cb:" ++ show transactionResult ++ "/" ++ show errorCode ++ "/" ++ show replyCode
+  when (replyMessage /= nullPtr) $ do
+    s <- convert "CP1251" "UTF-8" . BL.fromStrict <$> BS.packCString replyMessage
+    case decodeUtf8' (BL.toStrict s) of
+      Left _ -> warningM "Quik" "Unable to decode utf-8"
+      Right msg -> debugM "Quik" $ "Transaction cb message:" ++ T.unpack msg
+    
   maybecb <- hlTransactionCallback <$> readIORef state
   case maybecb of
     Just cb -> cb (transactionResult == ecSuccess) (toInteger transId) (toInteger orderNum)

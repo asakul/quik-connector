@@ -29,6 +29,8 @@ import System.Log.Logger
 
 import Safe
 
+import Commissions (CommissionConfig(..))
+
 type QuikOrderId = Integer
 
 data QuikBrokerState = QuikBrokerState {
@@ -48,8 +50,8 @@ maybeCall proj state arg = do
     Just callback -> callback arg
     Nothing -> return ()
 
-mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> IO BrokerInterface
-mkQuikBroker dllPath quikPath accs = do
+mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
+mkQuikBroker dllPath quikPath accs comms = do
   q <- mkQuik dllPath quikPath
 
   msgChan <- newBoundedChan 100
@@ -63,7 +65,7 @@ mkQuikBroker dllPath quikPath accs = do
     transIdCounter = 1
   }
 
-  setCallbacks q (qbTransactionCallback state) (qbOrderCallback state) (qbTradeCallback state)
+  setCallbacks q (qbTransactionCallback state) (qbOrderCallback state) (qbTradeCallback state comms)
 
   return BrokerInterface {
     accounts = accs,
@@ -195,12 +197,14 @@ qbOrderCallback state quikorder = do
     submitted order = updateOrder $ order { orderState = Submitted }
     cancelled order = updateOrder $ order { orderState = Cancelled }
 
-qbTradeCallback state quiktrade = do
+qbTradeCallback state comms quiktrade = do
   orders <- orderMap <$> readIORef state
   idMap <- orderIdMap <$> readIORef state
   debugM "Quik" $ "Trade: " ++ show quiktrade
   case BM.lookup (qtOrderId quiktrade) idMap >>= flip M.lookup orders of
-    Just order -> maybeCall notificationCallback state (TradeNotification $ tradeFor order)
+    Just order -> do
+      debugM "Quik" $ "Found comm: " ++ show (L.find (\x -> comPrefix x `T.isPrefixOf` orderSecurity order) comms)
+      maybeCall notificationCallback state (TradeNotification $ tradeFor order)
     Nothing -> warningM "Quik" $ "Incoming trade for unknown order: " ++ show quiktrade
   where
     tradeFor order = Trade {
@@ -213,5 +217,10 @@ qbTradeCallback state quiktrade = do
       tradeAccount = orderAccountId order,
       tradeSecurity = orderSecurity order,
       tradeTimestamp = qtTimestamp quiktrade,
+      tradeCommission = calculateCommission (orderSecurity order) (fromDouble $ qtVolume quiktrade) (qtQuantity quiktrade),
       tradeSignalId = orderSignalId order }
+
+    calculateCommission sec vol qty = case L.find (\x -> comPrefix x `T.isPrefixOf` sec) comms of
+      Just com -> vol * fromDouble (0.01 * comPercentage com) + fromDouble (comFixed com) * fromIntegral qty
+      Nothing -> 0
 

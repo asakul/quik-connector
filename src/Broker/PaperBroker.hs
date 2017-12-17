@@ -7,7 +7,6 @@ module Broker.PaperBroker (
   mkPaperBroker
 ) where
 
-import Control.DeepSeq
 import Data.Hashable
 import Data.Bits
 import ATrade.Types
@@ -25,6 +24,8 @@ import Control.Concurrent hiding (readChan, writeChan)
 import System.Log.Logger
 import ATrade.Quotes.QTIS
 import System.ZMQ4
+
+import Commissions (CommissionConfig(..))
 
 data TickMapKey = TickMapKey !T.Text !DataType
   deriving (Show, Eq, Ord)
@@ -52,14 +53,15 @@ data PaperBrokerState = PaperBrokerState {
   marketOpenTime :: DiffTime,
   postMarketStartTime :: DiffTime,
   postMarketFixTime :: DiffTime,
-  postMarketCloseTime :: DiffTime
+  postMarketCloseTime :: DiffTime,
+  commissions :: [CommissionConfig]
 }
 
 hourMin :: Integer -> Integer -> DiffTime
 hourMin h m = fromIntegral $ h * 3600 + m * 60
 
-mkPaperBroker :: Context -> T.Text -> BoundedChan Tick -> Price -> [T.Text] -> IO BrokerInterface
-mkPaperBroker ctx qtisEp tickChan startCash accounts = do
+mkPaperBroker :: Context -> T.Text -> BoundedChan Tick -> Price -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
+mkPaperBroker ctx qtisEp tickChan startCash accounts comms = do
   state <- newIORef PaperBrokerState {
     pbTid = Nothing,
     qtisTid = Nothing,
@@ -76,7 +78,8 @@ mkPaperBroker ctx qtisEp tickChan startCash accounts = do
     marketOpenTime = hourMin 7 0,
     postMarketStartTime = hourMin 15 40,
     postMarketFixTime = hourMin 15 45,
-    postMarketCloseTime = hourMin 15 50
+    postMarketCloseTime = hourMin 15 50,
+    commissions = comms
     }
 
   qtisRequestChan <- newBoundedChan 10000
@@ -129,7 +132,9 @@ brokerThread qtisRequestChan chan state = forever $ do
         writeChan qtisRequestChan (security tick)
 
     atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()))
-    executePendingOrders tick state
+    marketOpenTime' <- marketOpenTime <$> readIORef state
+    when ((utctDayTime . timestamp) tick >= marketOpenTime') $
+      executePendingOrders tick state
   where
     makeKey !tick = TickMapKey (security $! tick) (datatype tick)
 
@@ -146,10 +151,11 @@ executePendingOrders tick state = do
               debugM "PaperBroker" "Executing: pending market order"
               executeAtTick state order tick
               return $ Just $ orderId order
-            Limit price -> do
+            Limit price -> 
               executeLimitAt price order
             _ -> return Nothing
         else return Nothing
+
 
     executeLimitAt price order = case orderOperation order of
       Buy -> if (datatype tick == LastTradePrice && price > value tick && value tick > 0) || (datatype tick == BestOffer && price > value tick && value tick > 0)
@@ -168,18 +174,23 @@ executePendingOrders tick state = do
 pbSetNotificationCallback :: IORef PaperBrokerState -> Maybe (Notification -> IO ()) -> IO()
 pbSetNotificationCallback state callback = atomicModifyIORef' state (\s -> (s { notificationCallback = callback }, ()) )
 
-mkTrade :: TickerInfo -> Tick -> Order -> UTCTime -> Trade
-mkTrade info tick order timestamp = Trade {
+mkTrade :: TickerInfo -> Tick -> Order -> UTCTime -> Maybe CommissionConfig -> Trade
+mkTrade info tick order timestamp comconf = Trade {
   tradeOrderId = orderId order,
   tradePrice = value tick,
   tradeQuantity = orderQuantity order,
-  tradeVolume = fromInteger (orderQuantity order) * value tick * fromInteger (tiLotSize info),
+  tradeVolume = thisTradeVolume,
   tradeVolumeCurrency = "TEST",
   tradeOperation = orderOperation order,
   tradeAccount = orderAccountId order,
   tradeSecurity = orderSecurity order,
   tradeTimestamp = timestamp,
+  tradeCommission = 0 `fromMaybe` (calcCommission thisTradeVolume <$> comconf),
   tradeSignalId = orderSignalId order }
+  where
+    -- Futures have incorrect lotsize
+    thisTradeVolume = fromInteger (orderQuantity order) * value tick * if "SPBFUT" `T.isPrefixOf` security tick then 1 else fromInteger (tiLotSize info)
+    calcCommission vol c = vol * 0.01 * fromDouble (comPercentage c) + fromDouble (comFixed c) * fromIntegral (orderQuantity order)
 
 maybeCall proj state arg = do
   cb <- proj <$> readIORef state
@@ -190,11 +201,12 @@ maybeCall proj state arg = do
 executeAtTick state order tick = do
   let newOrder = order { orderState = Executed }
   tickerInfo <- obtainTickerInfo (security tick)
+  comm <- L.find (\comdef -> comPrefix comdef `T.isPrefixOf` security tick) . commissions <$> readIORef state
   let tradeVolume = fromInteger (orderQuantity order) * value tick * fromInteger (tiLotSize tickerInfo)
   atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , cash = cash s - tradeVolume}, ()))
   debugM "PaperBroker" $ "Executed: " ++ show newOrder ++ "; at tick: " ++ show tick
   ts <- getCurrentTime
-  maybeCall notificationCallback state $ TradeNotification $ mkTrade tickerInfo tick order ts
+  maybeCall notificationCallback state $ TradeNotification $ mkTrade tickerInfo tick order ts comm
   maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
   where
     obtainTickerInfo tickerId = do
@@ -248,19 +260,19 @@ pbSubmitOrder state order = do
                 atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s , pendingOrders = newOrder : pendingOrders s}, ()))
                 maybeCall notificationCallback state $ OrderNotification (orderId order) Submitted
 
-    submitStopOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
-    submitStopMarketOrder state order = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
+    submitStopOrder _ _ = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
+    submitStopMarketOrder _ _ = warningM "PaperBroker" $ "Not implemented: Submitted order: " ++ show order
 
-    orderDatatype order = case orderOperation order of
+    orderDatatype = case orderOperation order of
       Buy -> BestOffer
       Sell -> BestBid
 
-    key = TickMapKey (orderSecurity order) (orderDatatype order)
+    key = TickMapKey (orderSecurity order) orderDatatype
 
 pbCancelOrder :: IORef PaperBrokerState -> OrderId -> IO Bool
 pbCancelOrder state oid = do
   atomicModifyIORef' state (\s -> (s { pendingOrders = L.filter (\o -> orderId o /= oid) (pendingOrders s),
-    orders = M.adjustWithKey (\k v -> v { orderState = Cancelled }) oid (orders s) }, ()))
+    orders = M.adjustWithKey (\_ v -> v { orderState = Cancelled }) oid (orders s) }, ()))
   maybeCall notificationCallback state $ OrderNotification oid Cancelled
   return True
 
@@ -271,6 +283,8 @@ pbDestroyBroker state = do
     Just tid -> killThread tid
     Nothing -> return ()
 
+{-
 pbGetOrder :: IORef PaperBrokerState -> OrderId -> IO (Maybe Order)
 pbGetOrder state oid = M.lookup oid . orders <$> readIORef state
+-}
 

@@ -39,6 +39,7 @@ packages:
 - '.'
 - '../libatrade'
 - '../zeromq4-haskell-zap'
+- '../iconv'
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps: [ "datetime-0.3.1", "cond-0.4.1.1"]

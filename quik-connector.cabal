@@ -24,6 +24,7 @@ library
                      , Broker.QuikBroker.Trans2QuikApi
                      , Network.Telegram
                      , ATrade.Quotes.QTIS
+                     , Commissions
   ghc-options:         -Wall -Wunsupported-calling-conventions
   build-depends:       base >= 4.7 && < 5
                      , Win32
@@ -67,6 +68,7 @@ library
                      , incremental-parser
                      , attoparsec
                      , safe-exceptions
+                     , iconv
   default-language:    Haskell2010
 --  extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser
@@ -101,6 +103,7 @@ executable quik-connector-exe
                      , directory
                      , errors
                      , safe-exceptions
+                     , iconv
   default-language:    Haskell2010
   other-modules:       Config
 -- extra-libraries:     "user32"

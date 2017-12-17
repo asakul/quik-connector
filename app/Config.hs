@@ -7,6 +7,7 @@ module Config (
 
 ) where 
 
+import Commissions (CommissionConfig)
 import Data.Aeson
 import Data.Aeson.Types
 import qualified Data.ByteString.Lazy as BL
@@ -36,7 +37,8 @@ data Config = Config {
   quikAccounts :: [T.Text],
   tradeSink :: T.Text,
   telegramToken :: T.Text,
-  telegramChatId :: T.Text
+  telegramChatId :: T.Text,
+  commissions :: [CommissionConfig]
 } deriving (Show)
 
 readConfig :: String -> IO Config
@@ -65,6 +67,7 @@ parseConfig = withObject "object" $ \obj -> do
   trsink <- obj .: "trade-sink"
   tgToken <- obj .: "telegram-token"
   tgChatId <- obj .: "telegram-chatid"
+  commissionsConfig <- obj .: "commissions"
   accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
     qtisEndpoint = qtisEp,
@@ -81,7 +84,8 @@ parseConfig = withObject "object" $ \obj -> do
     quikAccounts = fmap T.pack accs,
     tradeSink = trsink,
     telegramToken = tgToken,
-    telegramChatId = tgChatId }
+    telegramChatId = tgChatId,
+    commissions = commissionsConfig }
   where
     parseTables :: Value -> Parser [TableConfig]
     parseTables = withArray "array" $ \arr -> mapM parseTableConfig (V.toList arr)
