@@ -36,17 +36,20 @@ import qualified Data.Text as T
 import Data.Maybe
 
 import Config
+import TickTable (mkTickTable)
 
-forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan QuoteSourceServerData)
+forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan Tick, BoundedChan QuoteSourceServerData)
 forkBoundedChan size sourceChan = do
-  sink <- newBoundedChan size
+  sink1 <- newBoundedChan size
+  sink2 <- newBoundedChan size
   sinkQss <- newBoundedChan size
   tid <- forkIO $ forever $ do
       v <- readChan sourceChan
-      writeChan sink v
+      writeChan sink1 v
+      writeChan sink2 v
       writeChan sinkQss (QSSTick v)
 
-  return (tid, sink, sinkQss)
+  return (tid, sink1, sink2, sinkQss)
 
 
 initLogging :: IO ()
@@ -70,19 +73,20 @@ main = do
   infoM "main" "Starting data import server"
   _ <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
 
-  (forkId, c1, c2) <- forkBoundedChan 10000 chan
+  (forkId, c0, c1, c2) <- forkBoundedChan 10000 chan
 
-  brokerQ <- mkQuikBroker (dllPath config) (quikPath config) (quikAccounts config) (commissions config)
   withContext (\ctx -> do
-    brokerP <- mkPaperBroker ctx (T.pack $ qtisEndpoint config) c1 1000000 ["demo"] (commissions config)
+    tickTable <- mkTickTable c0 ctx (T.pack $ qtisEndpoint config)
+    brokerQ <- mkQuikBroker tickTable (dllPath config) (quikPath config) (quikAccounts config) (commissions config)
+    brokerP <- mkPaperBroker tickTable c1 1000000 ["demo"] (commissions config)
     withZapHandler ctx (\zap -> do
-      zapSetWhitelist zap $ whitelist config
-      zapSetBlacklist zap $ blacklist config
+      zapSetWhitelist zap "global" $ whitelist config
+      zapSetBlacklist zap "global" $ blacklist config
 
       case brokerClientCertificateDir config of
         Just certFile -> do
           certs <- loadCertificatesFromDirectory certFile
-          forM_ certs (\cert -> zapAddClientCertificate zap cert)
+          forM_ certs (\cert -> zapAddClientCertificate zap "global" cert)
         Nothing -> return ()
 
       serverCert <- case brokerServerCertPath config of
@@ -100,7 +104,7 @@ main = do
       bracket (forkIO $ pipeReaderThread ctx config) killThread (\_ -> do
         withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
           withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
-            bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config)) stopQuoteSourceServer (\_ -> do
+            bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config) (Just "global")) stopQuoteSourceServer (\_ -> do
               bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
                 void $ Gtk.init Nothing
                 window <- new Gtk.Window [ #title := "Quik connector" ]
@@ -120,7 +124,7 @@ main = do
         (Just pipe, Just qsep) -> do
           tickChan <- newBoundedChan 10000
           bracket (startPipeReader (T.pack pipe) tickChan) stopPipeReader (\_ -> do
-            bracket (startQuoteSourceServer tickChan ctx (T.pack qsep)) stopQuoteSourceServer (\_ -> threadDelay 1000000))
+            bracket (startQuoteSourceServer tickChan ctx (T.pack qsep) (Just "global")) stopQuoteSourceServer (\_ -> threadDelay 1000000))
         _ -> return ()
       
 

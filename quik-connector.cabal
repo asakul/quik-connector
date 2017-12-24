@@ -1,5 +1,5 @@
 name:                quik-connector
-version:             0.2.0.1
+version:             0.2.1.0
 synopsis:            Atrade-Quik Connector application
 description:         Please see README.md
 homepage:            https://github.com/asakul/quik-connector
@@ -25,6 +25,7 @@ library
                      , Network.Telegram
                      , ATrade.Quotes.QTIS
                      , Commissions
+                     , TickTable
   ghc-options:         -Wall -Wunsupported-calling-conventions
   build-depends:       base >= 4.7 && < 5
                      , Win32
@@ -48,7 +49,7 @@ library
                      , aeson
                      , cond
                      , scientific
-                     , libatrade == 0.3.0.0
+                     , libatrade == 0.4.0.0
                      , deepseq
                      , errors
                      , split

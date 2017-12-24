@@ -8,6 +8,7 @@ module Broker.QuikBroker (
 import ATrade.Types
 import ATrade.Broker.Protocol
 import ATrade.Broker.Server
+import ATrade.Quotes.QTIS (TickerInfo(..))
 
 import Broker.QuikBroker.Trans2QuikApi hiding (tradeAccount)
 
@@ -30,6 +31,7 @@ import System.Log.Logger
 import Safe
 
 import Commissions (CommissionConfig(..))
+import TickTable (TickTableH, getTick, getTickerInfo, TickKey(..))
 
 type QuikOrderId = Integer
 
@@ -39,7 +41,8 @@ data QuikBrokerState = QuikBrokerState {
   orderMap :: M.Map OrderId Order,
   orderIdMap :: BM.Bimap QuikOrderId OrderId,
   trans2orderid :: M.Map Integer Order,
-  transIdCounter :: Integer
+  transIdCounter :: Integer,
+  tickTable :: TickTableH
 }
 
 nextTransId state = atomicModifyIORef' state (\s -> (s { transIdCounter = transIdCounter s + 1 }, transIdCounter s))
@@ -50,8 +53,8 @@ maybeCall proj state arg = do
     Just callback -> callback arg
     Nothing -> return ()
 
-mkQuikBroker :: FilePath -> FilePath -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
-mkQuikBroker dllPath quikPath accs comms = do
+mkQuikBroker :: TickTableH -> FilePath -> FilePath -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
+mkQuikBroker tt dllPath quikPath accs comms = do
   q <- mkQuik dllPath quikPath
 
   msgChan <- newBoundedChan 100
@@ -62,7 +65,8 @@ mkQuikBroker dllPath quikPath accs comms = do
     orderMap = M.empty,
     orderIdMap = BM.empty,
     trans2orderid = M.empty,
-    transIdCounter = 1
+    transIdCounter = 1,
+    tickTable = tt
   }
 
   setCallbacks q (qbTransactionCallback state) (qbOrderCallback state) (qbTradeCallback state comms)
@@ -83,14 +87,20 @@ qbSubmitOrder state order = do
   transId <- nextTransId state
   atomicModifyIORef' state (\s -> (s {
     trans2orderid = M.insert transId order (trans2orderid s) }, ()))
-  case makeTransactionString transId order of
-    Just transStr -> do
-      rc <- quikSendTransaction q transStr
-      debugM "Quik" $ "Sending transaction string: " ++ transStr
-      case rc of
-        Left errmsg -> warningM "Quik" $ "Unable to send transaction: " ++ T.unpack errmsg
-        Right _ -> debugM "Quik" $ "Order submitted: " ++ show order
-    Nothing -> warningM "Quik" $ "Unable to compose transaction string: " ++ show order
+  tt <- tickTable <$> readIORef state
+  tickerInfoMb <- getTickerInfo tt (orderSecurity order)
+  liquidTickMb <- getTick tt (TickKey (orderSecurity order) (if orderOperation order == Buy then BestOffer else BestBid))
+  case (tickerInfoMb, liquidTickMb) of
+    (Just tickerInfo, Just liquidTick) -> 
+      case makeTransactionString tickerInfo liquidTick transId order of
+        Just transStr -> do
+          rc <- quikSendTransaction q transStr
+          debugM "Quik" $ "Sending transaction string: " ++ transStr
+          case rc of
+            Left errmsg -> warningM "Quik" $ "Unable to send transaction: " ++ T.unpack errmsg
+            Right _ -> debugM "Quik" $ "Order submitted: " ++ show order
+        Nothing -> warningM "Quik" $ "Unable to compose transaction string: " ++ show order
+    _ -> warningM "Quik" $ "Unable to obtain data: " ++ show tickerInfoMb ++ "/" ++ show liquidTickMb
 
 
 qbCancelOrder state orderid = do
@@ -110,7 +120,7 @@ qbCancelOrder state orderid = do
 
 qbStopBroker state = return ()
 
-makeTransactionString transId order =
+makeTransactionString tickerInfo liquidTick transId order =
   case (classcode, seccode, accountTransactionString) of
     (Just cCode, Just sCode, Just accountStr) -> Just $
       accountStr ++
@@ -124,7 +134,7 @@ makeTransactionString transId order =
     _ -> Nothing
   where
     orderTypeCode = case orderPrice order of
-      Market -> "M"
+      Market -> "L"
       Limit _ -> "L"
       _ -> "X"
     operationCode = case orderOperation order of
@@ -133,7 +143,9 @@ makeTransactionString transId order =
     classcode = headMay . splitOn "#" . T.unpack $ orderSecurity order
     seccode = (`atMay` 1) . splitOn "#" . T.unpack $ orderSecurity order
     price = case orderPrice order of
-      Market -> "0"
+      Market -> if orderOperation order == Buy
+        then removeTrailingZeros . show $ value liquidTick - 10 * tiTickSize tickerInfo
+        else removeTrailingZeros . show $ value liquidTick + 10 * tiTickSize tickerInfo
       Limit p -> removeTrailingZeros . show $ p
       _ -> "0"
     removeTrailingZeros v = if '.' `L.elem` v then L.dropWhileEnd (== '.') . L.dropWhileEnd (== '0') $ v else v

@@ -26,20 +26,11 @@ import ATrade.Quotes.QTIS
 import System.ZMQ4
 
 import Commissions (CommissionConfig(..))
-
-data TickMapKey = TickMapKey !T.Text !DataType
-  deriving (Show, Eq, Ord)
-
-instance Hashable TickMapKey where
-  hashWithSalt salt (TickMapKey s dt) = hashWithSalt salt s `xor` hashWithSalt salt (fromEnum dt)
-
-data QTISResult = Fetching | Done TickerInfo
+import TickTable (TickTableH, TickKey(..), getTick, getTickerInfo)
 
 data PaperBrokerState = PaperBrokerState {
   pbTid :: Maybe ThreadId,
-  qtisTid :: Maybe ThreadId,
-  tickMap :: M.Map TickMapKey Tick,
-  tickerInfoMap :: M.Map TickerId QTISResult,
+  tickTable :: TickTableH,
   orders :: M.Map OrderId Order,
   cash :: !Price,
   notificationCallback :: Maybe (Notification -> IO ()),
@@ -60,13 +51,11 @@ data PaperBrokerState = PaperBrokerState {
 hourMin :: Integer -> Integer -> DiffTime
 hourMin h m = fromIntegral $ h * 3600 + m * 60
 
-mkPaperBroker :: Context -> T.Text -> BoundedChan Tick -> Price -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
-mkPaperBroker ctx qtisEp tickChan startCash accounts comms = do
+mkPaperBroker :: TickTableH -> BoundedChan Tick -> Price -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
+mkPaperBroker tickTableH tickChan startCash accounts comms = do
   state <- newIORef PaperBrokerState {
     pbTid = Nothing,
-    qtisTid = Nothing,
-    tickMap = M.empty,
-    tickerInfoMap = M.empty,
+    tickTable = tickTableH,
     orders = M.empty,
     cash = startCash,
     notificationCallback = Nothing,
@@ -82,13 +71,8 @@ mkPaperBroker ctx qtisEp tickChan startCash accounts comms = do
     commissions = comms
     }
 
-  qtisRequestChan <- newBoundedChan 10000
-
-  tid <- forkIO $ brokerThread qtisRequestChan tickChan state
+  tid <- forkIO $ brokerThread tickChan state
   atomicModifyIORef' state (\s -> (s { pbTid = Just tid }, ()))
-
-  qtid <- forkIO $ qtisThread state qtisRequestChan ctx qtisEp
-  atomicModifyIORef' state (\s -> (s { qtisTid = Just qtid }, ()))
 
   return BrokerInterface {
     accounts = accounts,
@@ -97,46 +81,13 @@ mkPaperBroker ctx qtisEp tickChan startCash accounts comms = do
     cancelOrder = pbCancelOrder state,
     stopBroker = pbDestroyBroker state }
     
-qtisThread :: IORef PaperBrokerState -> BoundedChan TickerId -> Context -> T.Text -> IO ()
-qtisThread state qtisRequestChan ctx qtisEndpoint =
-  forever $ do
-    threadDelay 1000000
-    tickerIds <- readListFromChan qtisRequestChan
-    ti <- qtisGetTickersInfo ctx qtisEndpoint tickerIds
-    forM_ ti (\newInfo -> atomicModifyIORef' state (\s -> (s { tickerInfoMap = M.insert (tiTicker newInfo) (Done newInfo) $! tickerInfoMap s }, ())))
-  where
-    readListFromChan chan = do
-      mh <- tryReadChan chan
-      case mh of
-        Just h -> do
-          t <- readListFromChan' [h] chan
-          return $ reverse t
-        _ -> do
-          h <- readChan chan
-          t <- readListFromChan' [h] chan
-          return $ reverse t
-
-    readListFromChan' h chan = do
-      mv <- tryReadChan chan
-      case mv of
-        Nothing -> return h
-        Just v -> readListFromChan' (v:h) chan
           
-brokerThread :: BoundedChan TickerId -> BoundedChan Tick -> IORef PaperBrokerState -> IO ()
-brokerThread qtisRequestChan chan state = forever $ do
+brokerThread :: BoundedChan Tick -> IORef PaperBrokerState -> IO ()
+brokerThread chan state = forever $ do
     tick <- readChan chan
-    when (datatype tick == LastTradePrice) $ do
-      info <- M.lookup (security tick) . tickerInfoMap <$> readIORef state
-      when (isNothing info) $ do
-        atomicModifyIORef' state (\s -> (s { tickerInfoMap = M.insert (security tick) Fetching $! tickerInfoMap s }, ()))
-        writeChan qtisRequestChan (security tick)
-
-    atomicModifyIORef' state (\s -> (s { tickMap = M.insert (makeKey tick) tick $! tickMap s }, ()))
     marketOpenTime' <- marketOpenTime <$> readIORef state
     when ((utctDayTime . timestamp) tick >= marketOpenTime') $
       executePendingOrders tick state
-  where
-    makeKey !tick = TickMapKey (security $! tick) (datatype tick)
 
 executePendingOrders tick state = do
   po <- pendingOrders <$> readIORef state
@@ -210,9 +161,10 @@ executeAtTick state order tick = do
   maybeCall notificationCallback state $ OrderNotification (orderId order) Executed
   where
     obtainTickerInfo tickerId = do
-      mInfo <- M.lookup tickerId . tickerInfoMap <$> readIORef state
+      table <- tickTable <$> readIORef state
+      mInfo <- getTickerInfo table tickerId
       case mInfo of
-        Just (Done info) -> return info
+        Just info -> return info
         _ -> return TickerInfo { tiTicker = tickerId,
           tiLotSize = 1,
           tiTickSize = 1 }
@@ -234,8 +186,9 @@ pbSubmitOrder state order = do
 
   where
     executeMarketOrder state order = do
-      tm <- tickMap <$> readIORef state
-      case M.lookup key tm of
+      tm <- tickTable <$> readIORef state
+      tickMb <- getTick tm key
+      case tickMb of
         Nothing -> rejectOrder state order
         Just tick -> if orderQuantity order /= 0
           then executeAtTick state order tick
@@ -243,9 +196,10 @@ pbSubmitOrder state order = do
     submitLimitOrder price state order = if orderQuantity order == 0
       then rejectOrder state order
       else do
-        tm <- tickMap <$> readIORef state
+        tm <- tickTable <$> readIORef state
+        tickMb <- getTick tm key
         debugM "PaperBroker" $ "Limit order submitted, looking up: " ++ show key
-        case M.lookup key tm of
+        case tickMb of
           Nothing -> do
             let newOrder = order { orderState = Submitted }
             atomicModifyIORef' state (\s -> (s { orders = M.insert (orderId order) newOrder $ orders s }, ()))
@@ -267,7 +221,7 @@ pbSubmitOrder state order = do
       Buy -> BestOffer
       Sell -> BestBid
 
-    key = TickMapKey (orderSecurity order) orderDatatype
+    key = TickKey (orderSecurity order) orderDatatype
 
 pbCancelOrder :: IORef PaperBrokerState -> OrderId -> IO Bool
 pbCancelOrder state oid = do
