@@ -10,7 +10,7 @@ import qualified Data.Text      as T
 import           Text.Printf.TH
 
 quikConnectorVersion :: (Int, Int, Int, Int)
-quikConnectorVersion = (0, 2, 3, 0)
+quikConnectorVersion = (0, 3, 0, 0)
 
 quikConnectorVersionText :: T.Text
 quikConnectorVersionText =
