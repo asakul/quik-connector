@@ -1,44 +1,44 @@
-{-# LANGUAGE OverloadedStrings, OverloadedLabels #-}
+{-# LANGUAGE OverloadedLabels  #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Config (
   TableConfig(..),
   Config(..),
   readConfig
 
-) where 
+) where
 
-import Commissions (CommissionConfig)
-import Data.Aeson
-import Data.Aeson.Types
+import           Commissions          (CommissionConfig)
+import           Data.Aeson
+import           Data.Aeson.Types
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.HashMap.Strict as HM
-import qualified Data.Vector as V
-import qualified Data.Text as T
+import qualified Data.HashMap.Strict  as HM
+import qualified Data.Text            as T
+import qualified Data.Vector          as V
 
 data TableConfig = TableConfig {
-  parserId :: String,
-  tableName :: String,
+  parserId    :: String,
+  tableName   :: String,
   tableParams :: Value
 } deriving (Show)
 
 data Config = Config {
-  quotesourceEndpoint :: String,
-  qtisEndpoint :: String,
-  pipeReaderQsEndpoint :: Maybe String,
-  tickPipePath :: Maybe String,
-  brokerserverEndpoint :: String,
-  whitelist :: [T.Text],
-  blacklist :: [T.Text],
-  brokerServerCertPath :: Maybe FilePath,
+  quotesourceEndpoint        :: String,
+  qtisEndpoint               :: String,
+  pipeReaderQsEndpoint       :: Maybe String,
+  tickPipePath               :: Maybe String,
+  brokerserverEndpoint       :: String,
+  whitelist                  :: [T.Text],
+  blacklist                  :: [T.Text],
+  brokerServerCertPath       :: Maybe FilePath,
   brokerClientCertificateDir :: Maybe FilePath,
-  tables :: [TableConfig],
-  quikPath :: String,
-  dllPath :: String,
-  quikAccounts :: [T.Text],
-  tradeSink :: T.Text,
-  telegramToken :: T.Text,
-  telegramChatId :: T.Text,
-  commissions :: [CommissionConfig]
+  tables                     :: [TableConfig],
+  quikPath                   :: String,
+  dllPath                    :: String,
+  quikAccounts               :: [T.Text],
+  tradeSink                  :: T.Text,
+  tradeSink2                 :: T.Text,
+  commissions                :: [CommissionConfig]
 } deriving (Show)
 
 readConfig :: String -> IO Config
@@ -46,7 +46,7 @@ readConfig fname = do
   content <- BL.readFile fname
   case decode content >>= parseMaybe parseConfig of
     Just config -> return config
-    Nothing -> error "Unable to load config"
+    Nothing     -> error "Unable to load config"
 
 parseConfig :: Value -> Parser Config
 parseConfig = withObject "object" $ \obj -> do
@@ -60,13 +60,12 @@ parseConfig = withObject "object" $ \obj -> do
   serverCert <- obj .:? "broker_server_certificate"
   clientCerts <- obj .:? "broker_client_certificates"
   rt <- case HM.lookup "tables" obj of
-    Just v -> parseTables v
+    Just v  -> parseTables v
     Nothing -> fail "Expected tables array"
   qp <- obj .: "quik-path"
   dp <- obj .: "dll-path"
   trsink <- obj .: "trade-sink"
-  tgToken <- obj .: "telegram-token"
-  tgChatId <- obj .: "telegram-chatid"
+  trsink2 <- obj .: "trade-sink2"
   commissionsConfig <- obj .: "commissions"
   accs <- V.toList <$> obj .: "accounts"
   return Config { quotesourceEndpoint = qse,
@@ -83,8 +82,7 @@ parseConfig = withObject "object" $ \obj -> do
     dllPath = dp,
     quikAccounts = fmap T.pack accs,
     tradeSink = trsink,
-    telegramToken = tgToken,
-    telegramChatId = tgChatId,
+    tradeSink2 = trsink2,
     commissions = commissionsConfig }
   where
     parseTables :: Value -> Parser [TableConfig]
@@ -95,7 +93,7 @@ parseConfig = withObject "object" $ \obj -> do
       pid <- obj .: "parser-id"
       tn <- obj .: "table-name"
       params <- case HM.lookup "params" obj of
-        Just x -> return x
+        Just x  -> return x
         Nothing -> return $ Object HM.empty
       return TableConfig {
         parserId = pid,

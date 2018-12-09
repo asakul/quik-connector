@@ -1,42 +1,46 @@
-{-# LANGUAGE OverloadedStrings, OverloadedLabels, LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE OverloadedLabels  #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main where
 
-import System.IO
+import           System.IO
 
-import QuoteSource.DataImport
-import Control.Concurrent hiding (readChan, writeChan)
-import Control.Monad
-import Control.Exception.Safe
-import Control.Error.Util
-import qualified GI.Gtk as Gtk
-import Data.GI.Base
-import Control.Concurrent.BoundedChan
-import ATrade.Types
-import QuoteSource.TableParsers.AllParamsTableParser
-import QuoteSource.TableParser
-import QuoteSource.PipeReader
-import ATrade.QuoteSource.Server
+import           ATrade.QuoteSource.Server
+import           ATrade.Types
+import           Control.Concurrent                            hiding (readChan,
+                                                                writeChan)
+import           Control.Concurrent.BoundedChan
+import           Control.Error.Util
+import           Control.Exception.Safe
+import           Control.Monad
+import           Data.GI.Base
+import qualified GI.Gtk                                        as Gtk
+import           QuoteSource.DataImport
+import           QuoteSource.PipeReader
+import           QuoteSource.TableParser
+import           QuoteSource.TableParsers.AllParamsTableParser
 
-import ATrade.Broker.TradeSinks.ZMQTradeSink
-import ATrade.Broker.TradeSinks.TelegramTradeSink
-import ATrade.Broker.Server
-import Broker.PaperBroker
-import Broker.QuikBroker
+import           ATrade.Broker.Server
+import           ATrade.Broker.TradeSinks.ZMQTradeSink
+import           Broker.PaperBroker
+import           Broker.QuikBroker
 
-import System.Directory
-import System.Timeout
-import System.Log.Logger
-import System.Log.Handler.Simple
-import System.Log.Handler (setFormatter)
-import System.Log.Formatter
-import System.ZMQ4
-import System.ZMQ4.ZAP
+import           System.Directory
+import           System.Log.Formatter
+import           System.Log.Handler                            (setFormatter)
+import           System.Log.Handler.Simple
+import           System.Log.Logger
+import           System.Timeout
+import           System.ZMQ4
+import           System.ZMQ4.ZAP
 
-import qualified Data.Text as T
-import Data.Maybe
+import           Data.Maybe
+import qualified Data.Text                                     as T
 
-import Config
-import TickTable (mkTickTable)
+import           Config
+import           TickTable                                     (mkTickTable)
+import           Version
 
 forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan Tick, BoundedChan QuoteSourceServerData)
 forkBoundedChan size sourceChan = do
@@ -57,14 +61,18 @@ initLogging = do
   handler <- streamHandler stderr DEBUG >>=
     (\x -> return $
       setFormatter x (simpleLogFormatter "$utcTime\t {$loggername} <$prio> -> $msg"))
+  fhandler <- fileHandler "quik-connector.log" DEBUG >>=
+    (\x -> return $
+      setFormatter x (simpleLogFormatter "$utcTime\t {$loggername} <$prio> -> $msg"))
 
   hSetBuffering stderr LineBuffering
   updateGlobalLogger rootLoggerName (setLevel DEBUG)
-  updateGlobalLogger rootLoggerName (setHandlers [handler])
+  updateGlobalLogger rootLoggerName (setHandlers [handler, fhandler])
 
 main :: IO ()
 main = do
   initLogging
+  infoM "main" $ "Starting quik-connector-" ++ T.unpack quikConnectorVersionText
   infoM "main" "Loading config"
   config <- readConfig "quik-connector.config.json"
 
@@ -103,9 +111,9 @@ main = do
 
       bracket (forkIO $ pipeReaderThread ctx config) killThread (\_ -> do
         withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
-          withTelegramTradeSink (telegramToken config) (telegramChatId config) (\telegramTradeSink -> do
+          withZMQTradeSink ctx (tradeSink2 config) (\zmqTradeSink2 -> do
             bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config) (Just "global")) stopQuoteSourceServer (\_ -> do
-              bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [telegramTradeSink, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
+              bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [zmqTradeSink2, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
                 void $ Gtk.init Nothing
                 window <- new Gtk.Window [ #title := "Quik connector" ]
                 void $ on window #destroy Gtk.mainQuit
@@ -126,7 +134,7 @@ main = do
           bracket (startPipeReader (T.pack pipe) tickChan) stopPipeReader (\_ -> do
             bracket (startQuoteSourceServer tickChan ctx (T.pack qsep) (Just "global")) stopQuoteSourceServer (\_ -> threadDelay 1000000))
         _ -> return ()
-      
+
 
 loadCertificatesFromDirectory :: FilePath -> IO [CurveCertificate]
 loadCertificatesFromDirectory filepath = do

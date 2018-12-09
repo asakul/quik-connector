@@ -1,5 +1,5 @@
 name:                quik-connector
-version:             0.2.1.0
+version:             0.2.3.0
 synopsis:            Atrade-Quik Connector application
 description:         Please see README.md
 homepage:            https://github.com/asakul/quik-connector
@@ -49,7 +49,7 @@ library
                      , aeson
                      , cond
                      , scientific
-                     , libatrade == 0.4.0.0
+                     , libatrade == 0.7.0.0
                      , deepseq
                      , errors
                      , split
@@ -105,8 +105,10 @@ executable quik-connector-exe
                      , errors
                      , safe-exceptions
                      , iconv
+                     , th-printf
   default-language:    Haskell2010
   other-modules:       Config
+                     , Version
 -- extra-libraries:     "user32"
 
 test-suite quik-connector-test

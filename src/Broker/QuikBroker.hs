@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Broker.QuikBroker (
   mkQuikBroker
@@ -87,11 +88,15 @@ qbSubmitOrder state order = do
   transId <- nextTransId state
   atomicModifyIORef' state (\s -> (s {
     trans2orderid = M.insert transId order (trans2orderid s) }, ()))
+  debugM "Quik" "Getting ticktable"
   tt <- tickTable <$> readIORef state
+  debugM "Quik" "Getting tickerinfo from ticktable"
   tickerInfoMb <- getTickerInfo tt (orderSecurity order)
+  debugM "Quik" "Getting liquid ticks"
   liquidTickMb <- getTick tt (TickKey (orderSecurity order) (if orderOperation order == Buy then BestOffer else BestBid))
+  debugM "Quik" "Obtained"
   case (tickerInfoMb, liquidTickMb) of
-    (Just tickerInfo, Just liquidTick) -> 
+    (Just !tickerInfo, Just !liquidTick) -> 
       case makeTransactionString tickerInfo liquidTick transId order of
         Just transStr -> do
           rc <- quikSendTransaction q transStr
@@ -144,8 +149,8 @@ makeTransactionString tickerInfo liquidTick transId order =
     seccode = (`atMay` 1) . splitOn "#" . T.unpack $ orderSecurity order
     price = case orderPrice order of
       Market -> if orderOperation order == Buy
-        then removeTrailingZeros . show $ value liquidTick - 10 * tiTickSize tickerInfo
-        else removeTrailingZeros . show $ value liquidTick + 10 * tiTickSize tickerInfo
+        then removeTrailingZeros . show $ value liquidTick + 10 * tiTickSize tickerInfo
+        else removeTrailingZeros . show $ value liquidTick - 10 * tiTickSize tickerInfo
       Limit p -> removeTrailingZeros . show $ p
       _ -> "0"
     removeTrailingZeros v = if '.' `L.elem` v then L.dropWhileEnd (== '.') . L.dropWhileEnd (== '0') $ v else v

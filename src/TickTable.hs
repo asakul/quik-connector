@@ -16,7 +16,7 @@ import Control.Concurrent (forkIO, ThreadId, threadDelay)
 import Control.Concurrent.BoundedChan (BoundedChan, newBoundedChan, readChan, tryReadChan, writeChan)
 import Control.Concurrent.MVar (newEmptyMVar)
 
-import Control.Monad (forM_, when, void)
+import Control.Monad (forM_, when, void, forever)
 
 import Data.Maybe (catMaybes, isNothing)
 import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
@@ -24,19 +24,22 @@ import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
+import System.Log.Logger (debugM)
+
 import System.ZMQ4 (Context)
 
 data TickKey = TickKey TickerId DataType
   deriving (Show, Ord, Eq)
 
 data TickTable = TickTable {
-  ticks :: M.Map TickKey Tick,
-  tickerInfo :: M.Map TickerId TickerInfo
+  ticks :: !(M.Map TickKey Tick),
+  tickerInfo :: !(M.Map TickerId TickerInfo)
 }
 
 type TickTableH = IORef TickTable
 
 data QTISThreadRequest = RequestTickerInfo TickerId | Shutdown
+  deriving (Show, Eq)
 
 mkTickTable :: BoundedChan Tick -> Context -> T.Text -> IO (IORef TickTable)
 mkTickTable chan ctx qtisEndpoint = do
@@ -48,7 +51,7 @@ mkTickTable chan ctx qtisEndpoint = do
   void $ forkIO $ tickTableThread qtisChan r shutdownMVar qtisTid
   return r
   where
-    tickTableThread qtisChan r shutdownMVar qtisTid = do
+    tickTableThread qtisChan r shutdownMVar qtisTid = forever $ do
       t <- readChan chan
       atomicModifyIORef' r (\s -> (s { ticks = M.insert (TickKey (security t) (datatype t)) t $! ticks s }, ()))
       when (datatype t == LastTradePrice) $ do
@@ -56,9 +59,10 @@ mkTickTable chan ctx qtisEndpoint = do
         when (isNothing $ M.lookup (security t) infoMap) $
           writeChan qtisChan $ RequestTickerInfo (security t)
 
-    qtisThread r qtisChan ctx qtisEndpoint = do
+    qtisThread r qtisChan ctx qtisEndpoint = forever $ do
       threadDelay 1000000
       requests <- readListFromChan qtisChan
+      debugM "TickTable" $ "Requested info for tickers: " ++ show requests
       ti <- qtisGetTickersInfo ctx qtisEndpoint (catMaybes $ fmap requestToTicker requests)
       forM_ ti (\newInfo -> atomicModifyIORef' r (\s -> (s { tickerInfo = M.insert (tiTicker newInfo) newInfo $! tickerInfo s }, ())))
 
