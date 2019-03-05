@@ -130,9 +130,10 @@ main = do
     pipeReaderThread ctx config =
       case (tickPipePath config, pipeReaderQsEndpoint config) of
         (Just pipe, Just qsep) -> do
+          infoM "main" $ "Pipe/QS: " ++ pipe ++ "/" ++ qsep
           tickChan <- newBoundedChan 10000
-          bracket (startPipeReader (T.pack pipe) tickChan) stopPipeReader (\_ -> do
-            bracket (startQuoteSourceServer tickChan ctx (T.pack qsep) (Just "global")) stopQuoteSourceServer (\_ -> threadDelay 1000000))
+          bracket (startPipeReader ctx (T.pack pipe) tickChan) stopPipeReader (\_ -> do
+            bracket (startQuoteSourceServer tickChan ctx (T.pack qsep) (Just "global")) stopQuoteSourceServer (\_ -> forever $ threadDelay 1000000))
         _ -> return ()
 
 
