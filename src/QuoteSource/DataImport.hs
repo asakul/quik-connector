@@ -6,20 +6,20 @@ module QuoteSource.DataImport
   shutdownDataImportServer
 ) where
 
-import Control.Concurrent.BoundedChan
-import Control.Monad.State.Strict
-import ATrade.Types
-import Data.IORef
-import Data.Time.Clock
-import QuoteSource.TableParser
-import System.Win32.DDE
-import System.Win32.XlParser
+import           ATrade.Types
+import           Control.Concurrent.BoundedChan
+import           Control.Monad.State.Strict
+import           Data.IORef
+import           Data.Time.Clock
+import           QuoteSource.TableParser
+import           System.Win32.DDE
+import           System.Win32.XlParser
 
-import qualified Data.Map as M
+import qualified Data.Map                       as M
 
 data ServerState = ServerState {
-  appName :: String,
-  parsers :: IORef (M.Map String TableParserInstance),
+  appName     :: String,
+  parsers     :: IORef (M.Map String TableParserInstance),
   tickChannel :: BoundedChan Tick
 }
 

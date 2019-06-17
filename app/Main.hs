@@ -109,7 +109,7 @@ main = do
       let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
         sspCertificate = serverCert }
 
-      bracket (forkIO $ pipeReaderThread ctx config) killThread (\_ -> do
+      bracket (forkIO $ pipeReaderThread ctx config c2) killThread (\_ -> do
         withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
           withZMQTradeSink ctx (tradeSink2 config) (\zmqTradeSink2 -> do
             bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config) (Just "global")) stopQuoteSourceServer (\_ -> do
@@ -127,13 +127,11 @@ main = do
   void $ timeout 1000000 $ killThread forkId
   infoM "main" "Main thread done"
   where
-    pipeReaderThread ctx config =
-      case (tickPipePath config, pipeReaderQsEndpoint config) of
-        (Just pipe, Just qsep) -> do
-          infoM "main" $ "Pipe/QS: " ++ pipe ++ "/" ++ qsep
-          tickChan <- newBoundedChan 10000
-          bracket (startPipeReader ctx (T.pack pipe) tickChan) stopPipeReader (\_ -> do
-            bracket (startQuoteSourceServer tickChan ctx (T.pack qsep) (Just "global")) stopQuoteSourceServer (\_ -> forever $ threadDelay 1000000))
+    pipeReaderThread ctx config qsdataChan =
+      case pipeReaderQsEndpoint config of
+        Just qsep -> do
+          infoM "main" $ "QS: " ++ qsep
+          bracket (startPipeReader ctx (T.pack qsep) qsdataChan) stopPipeReader (\_ -> forever $ threadDelay 1000000)
         _ -> return ()
 
 
