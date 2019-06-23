@@ -40,6 +40,7 @@ import Foreign
 import Foreign.C.Types
 import Foreign.C.String
 import Foreign.Marshal.Array
+import           System.Log.Logger              (debugM, warningM)
 
 import qualified Data.ByteString.Lazy as BL
 
@@ -121,11 +122,14 @@ ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2
     handleConnect state hsz1 hsz2 = do
       myDdeState <- readIORef state
       maybeAppName <- queryString myDdeState 256 hsz2
+      debugM "DDE" $ "Handle connect:" ++ show maybeAppName
       case maybeAppName of
         Just incomingAppName -> do
-          return $ if incomingAppName == appName myDdeState
-            then ddeResultTrue
-            else ddeResultFalse
+          if incomingAppName == appName myDdeState
+            then do
+              return ddeResultTrue
+            else do
+              return ddeResultFalse
         Nothing -> return ddeResultFalse
 
     handlePoke state hsz1 hData = do
@@ -135,7 +139,9 @@ ddeCallback state msgType format hConv hsz1 hsz2 hData dwData1 dwData2
         Nothing -> return ddeResultFalse
         Just topic -> withDdeData hData (\xlData -> do
           case runGetOrFail xlParser $ BL.fromStrict xlData of
-            Left (_,  _, errmsg) -> return ddeResultFalse
+            Left (_,  _, errmsg) -> do
+              warningM "DDE" $ "Parsing error: " ++ show errmsg
+              return ddeResultFalse
             Right (_, _, table) -> do
               rc <- (dataCallback myDdeState) topic table
               return $ if rc

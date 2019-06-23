@@ -49,7 +49,7 @@ library
                      , aeson
                      , cond
                      , scientific
-                     , libatrade == 0.8.0.0
+                     , libatrade >= 0.8 && < 0.9
                      , deepseq
                      , errors
                      , split

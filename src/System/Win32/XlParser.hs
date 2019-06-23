@@ -4,15 +4,17 @@ module System.Win32.XlParser (
   xlParser
 ) where
 
-import Control.Applicative
-import Control.Monad
-import Data.Binary.Get
-import Data.Binary.IEEE754
-import Data.ByteString hiding (concat, unpack)
-import Data.List as L
-import Data.Word
-import Data.Text as T hiding (concat)
-import Data.Text.Encoding
+import           Codec.Text.IConv
+import           Control.Applicative
+import           Control.Monad
+import           Data.Binary.Get
+import           Data.Binary.IEEE754
+import           Data.ByteString      hiding (concat, unpack)
+import qualified Data.ByteString.Lazy as BL
+import           Data.List            as L
+import           Data.Text            as T hiding (concat)
+import           Data.Text.Encoding
+import           Data.Word
 
 data XlData = XlInt Int | XlDouble Double | XlString String | XlEmpty
   deriving (Eq, Show)
@@ -73,12 +75,16 @@ xlParser = do
 
     parseStrings blocksize = do
       length <- fromEnum <$> getWord8
-      s <- unpack . decodeUtf8 <$> getByteString length
-      if length + 1 >= blocksize
-        then return [XlString s]
-        else do
-          rest <- parseStrings (blocksize - length - 1)
-          return $ XlString s : rest
+      s <- convert "CP1251" "UTF-8" . BL.fromStrict <$> getByteString length
+      case decodeUtf8' (BL.toStrict s) of
+        Left err -> fail $ "Can't parse utf8: " ++ show err
+        Right bs -> do
+          let s = unpack bs
+          if length + 1 >= blocksize
+            then return [XlString s]
+            else do
+              rest <- parseStrings (blocksize - length - 1)
+              return $ XlString s : rest
 
     parseBlanks blocksize = do
       fields <- fromEnum <$> getWord16le
