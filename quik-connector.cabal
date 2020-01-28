@@ -49,7 +49,7 @@ library
                      , aeson
                      , cond
                      , scientific
-                     , libatrade >= 0.8 && < 0.9
+                     , libatrade >= 0.9 && < 0.10
                      , deepseq
                      , errors
                      , split
@@ -109,6 +109,7 @@ executable quik-connector-exe
   default-language:    Haskell2010
   other-modules:       Config
                      , Version
+                     , Paths_quik_connector
 -- extra-libraries:     "user32"
 
 test-suite quik-connector-test

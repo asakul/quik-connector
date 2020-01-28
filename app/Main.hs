@@ -37,7 +37,10 @@ import           System.ZMQ4.ZAP
 
 import           Data.Maybe
 import qualified Data.Text                                     as T
+import           Data.Version
 
+import           ATrade                                        (libatrade_gitrev,
+                                                                libatrade_version)
 import           Config
 import           TickTable                                     (mkTickTable)
 import           Version
@@ -72,7 +75,7 @@ initLogging = do
 main :: IO ()
 main = do
   initLogging
-  infoM "main" $ "Starting quik-connector-" ++ T.unpack quikConnectorVersionText
+  infoM "main" $ "Starting quik-connector-" ++ T.unpack quikConnectorVersionText ++ "; libatrade-" ++ showVersion libatrade_version ++ "(" ++ libatrade_gitrev ++ ")"
   infoM "main" "Loading config"
   config <- readConfig "quik-connector.config.json"
 
@@ -112,7 +115,7 @@ main = do
       bracket (forkIO $ pipeReaderThread ctx config c2) killThread (\_ -> do
         withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
           withZMQTradeSink ctx (tradeSink2 config) (\zmqTradeSink2 -> do
-            bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config) (Just "global")) stopQuoteSourceServer (\_ -> do
+            bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config) quoteSourceServerSecurityParams) stopQuoteSourceServer (\_ -> do
               bracket (startBrokerServer [brokerP, brokerQ] ctx (T.pack $ brokerserverEndpoint config) [zmqTradeSink2, zmqTradeSink] serverParams) stopBrokerServer (\_ -> do
                 void $ Gtk.init Nothing
                 window <- new Gtk.Window [ #title := "Quik connector" ]
@@ -133,6 +136,7 @@ main = do
           infoM "main" $ "QS: " ++ qsep
           bracket (startPipeReader ctx (T.pack qsep) qsdataChan) stopPipeReader (\_ -> forever $ threadDelay 1000000)
         _ -> return ()
+    quoteSourceServerSecurityParams = defaultServerSecurityParams { sspDomain = Just "global" }
 
 
 loadCertificatesFromDirectory :: FilePath -> IO [CurveCertificate]

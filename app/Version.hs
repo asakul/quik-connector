@@ -1,4 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
 
 module Version
   (
@@ -6,15 +5,14 @@ module Version
     quikConnectorVersionText
   ) where
 
-import qualified Data.Text      as T
-import           Text.Printf.TH
+import qualified Data.Text            as T
+import           Data.Version
+import           Paths_quik_connector
 
-quikConnectorVersion :: (Int, Int, Int, Int)
-quikConnectorVersion = (0, 4, 0, 0)
+
+quikConnectorVersion :: Version
+quikConnectorVersion = version
 
 quikConnectorVersionText :: T.Text
-quikConnectorVersionText =
-  [st|%d.%d.%d.%d|] v1 v2 v3 v4
-  where
-    (v1, v2, v3, v4) = quikConnectorVersion
+quikConnectorVersionText = T.pack $ showVersion version
 
