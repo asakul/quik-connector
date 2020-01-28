@@ -1,5 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings  #-}
 
 module Broker.QuikBroker.Trans2QuikApi (
   Trans2QuikApi(..),
@@ -12,30 +12,30 @@ module Broker.QuikBroker.Trans2QuikApi (
   quikSendTransaction
 ) where
 
-import Foreign
-import Foreign.C.Types
-import Foreign.C.String
-import Foreign.Marshal.Array
-import Control.Monad
-import Control.Monad.Trans.Except
-import Control.Error.Util
-import Control.Monad.IO.Class
-import System.Win32.DLL
-import System.Win32.Types
-import Control.Concurrent
-import Control.Exception.Safe
-import Data.IORef
-import Data.Time.Clock
-import Data.Time.Calendar
-import Data.Ratio
-import Data.Typeable
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.Set as S
-import qualified Data.Text as T
-import Data.Text.Encoding
-import System.Log.Logger
-import Codec.Text.IConv
+import           Codec.Text.IConv
+import           Control.Concurrent
+import           Control.Error.Util
+import           Control.Exception.Safe
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Except
+import qualified Data.ByteString            as BS
+import qualified Data.ByteString.Lazy       as BL
+import           Data.IORef
+import           Data.Ratio
+import qualified Data.Set                   as S
+import qualified Data.Text                  as T
+import           Data.Text.Encoding
+import           Data.Time.Calendar
+import           Data.Time.Clock
+import           Data.Typeable
+import           Foreign
+import           Foreign.C.String
+import           Foreign.C.Types
+import           Foreign.Marshal.Array
+import           System.Log.Logger
+import           System.Win32.DLL
+import           System.Win32.Types
 
 type QuikErrorCode = LONG
 
@@ -293,113 +293,113 @@ foreign import stdcall "dynamic"
   mkTradeKindFun :: FunPtr TradeKindF -> TradeKindF
 
 toDouble :: CDouble -> Double
-toDouble (CDouble x) = x 
+toDouble (CDouble x) = x
 
 data Trans2QuikApi = Trans2QuikApi {
-  connect :: ConnectF,
-  disconnect :: DisconnectF,
-  isQuikConnected :: IsQuikConnectedF,
-  isDllConnected :: IsDllConnectedF,
-  sendSyncTransaction :: SendSyncTransactionF,
-  sendAsyncTransaction :: SendAsyncTransactionF,
-  setConnectionStatusCallback :: SetConnectionStatusCallbackF,
+  connect                      :: ConnectF,
+  disconnect                   :: DisconnectF,
+  isQuikConnected              :: IsQuikConnectedF,
+  isDllConnected               :: IsDllConnectedF,
+  sendSyncTransaction          :: SendSyncTransactionF,
+  sendAsyncTransaction         :: SendAsyncTransactionF,
+  setConnectionStatusCallback  :: SetConnectionStatusCallbackF,
   setTransactionsReplyCallback :: SetTransactionsReplyCallbackF,
-  subscribeOrders :: SubscribeOrdersF,
-  subscribeTrades :: SubscribeTradesF,
-  startOrders :: StartOrdersF,
-  startTrades :: StartTradesF,
-  unsubscribeOrders :: UnsubscribeOrdersF,
-  unsubscribeTrades :: UnsubscribeTradesF,
+  subscribeOrders              :: SubscribeOrdersF,
+  subscribeTrades              :: SubscribeTradesF,
+  startOrders                  :: StartOrdersF,
+  startTrades                  :: StartTradesF,
+  unsubscribeOrders            :: UnsubscribeOrdersF,
+  unsubscribeTrades            :: UnsubscribeTradesF,
 
-  orderQty :: OrderQtyF,
-  orderDate :: OrderDateF,
-  orderTime :: OrderTimeF,
-  orderActivationTime :: OrderActivationTimeF,
-  orderWithdrawTime :: OrderWithdrawTimeF,
-  orderExpiry :: OrderExpiryF,
-  orderAccruedInt :: OrderAccruedIntF,
-  orderYield :: OrderYieldF,
-  orderUserId :: OrderUserIdF,
-  orderUid :: OrderUidF,
-  orderAccount :: OrderAccountF,
-  orderBrokerRef :: OrderBrokerRefF,
-  orderClientCode :: OrderClientCodeF,
-  orderFirmId :: OrderFirmIdF,
-  orderVisibleQty :: OrderVisibleQtyF,
-  orderPeriod :: OrderPeriodF,
-  orderDateTime :: OrderDateTimeF,
+  orderQty                     :: OrderQtyF,
+  orderDate                    :: OrderDateF,
+  orderTime                    :: OrderTimeF,
+  orderActivationTime          :: OrderActivationTimeF,
+  orderWithdrawTime            :: OrderWithdrawTimeF,
+  orderExpiry                  :: OrderExpiryF,
+  orderAccruedInt              :: OrderAccruedIntF,
+  orderYield                   :: OrderYieldF,
+  orderUserId                  :: OrderUserIdF,
+  orderUid                     :: OrderUidF,
+  orderAccount                 :: OrderAccountF,
+  orderBrokerRef               :: OrderBrokerRefF,
+  orderClientCode              :: OrderClientCodeF,
+  orderFirmId                  :: OrderFirmIdF,
+  orderVisibleQty              :: OrderVisibleQtyF,
+  orderPeriod                  :: OrderPeriodF,
+  orderDateTime                :: OrderDateTimeF,
 
-  tradeDate :: TradeDateF,
-  tradeSettleDate :: TradeSettleDateF,
-  tradeTime :: TradeTimeF,
-  tradeIsMarginal :: TradeIsMarginalF,
-  tradeCurrency :: TradeCurrencyF,
-  tradeSettleCurrency :: TradeSettleCurrencyF,
-  tradeSettleCode :: TradeSettleCodeF,
-  tradeAccruedInt :: TradeAccruedIntF,
-  tradeYield :: TradeYieldF,
-  tradeUserId :: TradeUserIdF,
-  tradeAccount :: TradeAccountF,
-  tradeBrokerRef :: TradeBrokerRefF,
-  tradeClientCode :: TradeClientCodeF,
-  tradeTsCommission :: TradeTsCommissionF,
-  tradePeriod :: TradePeriodF,
-  tradeDateTime :: TradeDateTimeF,
-  tradeKind :: TradeKindF,
+  tradeDate                    :: TradeDateF,
+  tradeSettleDate              :: TradeSettleDateF,
+  tradeTime                    :: TradeTimeF,
+  tradeIsMarginal              :: TradeIsMarginalF,
+  tradeCurrency                :: TradeCurrencyF,
+  tradeSettleCurrency          :: TradeSettleCurrencyF,
+  tradeSettleCode              :: TradeSettleCodeF,
+  tradeAccruedInt              :: TradeAccruedIntF,
+  tradeYield                   :: TradeYieldF,
+  tradeUserId                  :: TradeUserIdF,
+  tradeAccount                 :: TradeAccountF,
+  tradeBrokerRef               :: TradeBrokerRefF,
+  tradeClientCode              :: TradeClientCodeF,
+  tradeTsCommission            :: TradeTsCommissionF,
+  tradePeriod                  :: TradePeriodF,
+  tradeDateTime                :: TradeDateTimeF,
+  tradeKind                    :: TradeKindF,
 
-  dllHandle :: HMODULE
+  dllHandle                    :: HMODULE
 }
 
 data QuikOrder = QuikOrder {
   qoTransId :: Integer,
   qoOrderId :: Integer,
-  qoTicker :: String,
-  qoPrice :: Double,
+  qoTicker  :: String,
+  qoPrice   :: Double,
   qoBalance :: Integer,
-  qoSell :: Bool,
-  qoStatus :: Int
+  qoSell    :: Bool,
+  qoStatus  :: Int
 } deriving (Show, Eq, Ord)
 
 data QuikTrade = QuikTrade {
-  qtOrderId :: Integer,
-  qtTicker :: String,
-  qtPrice :: Double,
-  qtQuantity :: Integer,
-  qtSell :: Bool,
-  qtVolume :: Double,
+  qtOrderId        :: Integer,
+  qtTicker         :: String,
+  qtPrice          :: Double,
+  qtQuantity       :: Integer,
+  qtSell           :: Bool,
+  qtVolume         :: Double,
   qtVolumeCurrency :: String,
-  qtTimestamp :: UTCTime
+  qtTimestamp      :: UTCTime
 } deriving (Show, Eq)
 
   -- Success -> transaction id -> order num -> IO ()
 type HlTransactionCallback = Bool -> Integer -> Integer -> IO ()
-type HlOrderCallback = QuikOrder -> IO () 
+type HlOrderCallback = QuikOrder -> IO ()
 type HlTradeCallback = QuikTrade -> IO ()
 
 data Quik = Quik {
-  quikApi :: Trans2QuikApi,
+  quikApi               :: Trans2QuikApi,
 
-  connectionCallback :: FunPtr ConnectionStatusCallback,
-  transactionCallback :: FunPtr TransactionsReplyCallback,
-  orderCallback :: FunPtr OrderStatusCallback,
-  tradeCallback :: FunPtr TradeStatusCallback,
+  connectionCallback    :: FunPtr ConnectionStatusCallback,
+  transactionCallback   :: FunPtr TransactionsReplyCallback,
+  orderCallback         :: FunPtr OrderStatusCallback,
+  tradeCallback         :: FunPtr TradeStatusCallback,
 
   hlTransactionCallback :: Maybe HlTransactionCallback,
-  hlOrderCallback :: Maybe HlOrderCallback,
-  hlTradeCallback :: Maybe HlTradeCallback,
+  hlOrderCallback       :: Maybe HlOrderCallback,
+  hlTradeCallback       :: Maybe HlTradeCallback,
 
-  connectedToServer :: Bool,
-  connectedToDll :: Bool,
-  watchdogTid :: ThreadId,
+  connectedToServer     :: Bool,
+  connectedToDll        :: Bool,
+  watchdogTid           :: ThreadId,
 
-  handledTrades :: S.Set CLLong,
-  handledOrders :: S.Set QuikOrder
+  handledTrades         :: S.Set CLLong,
+  handledOrders         :: S.Set QuikOrder
 }
 
 quikSendTransaction :: IORef Quik -> String -> IO (Either T.Text ())
 quikSendTransaction state transactionString = do
   api <- quikApi <$> readIORef state
-  alloca (\errcode -> 
+  alloca (\errcode ->
     allocaBytes 1024 (\errorMsg ->
       withCString transactionString (\trs -> do
         rc <- sendAsyncTransaction api trs errcode errorMsg 1024
@@ -408,19 +408,19 @@ quikSendTransaction state transactionString = do
             msg <- peekCString errorMsg
             return $ Left $ "Unable to submit transaction: " `T.append` T.pack msg
           else return $ Right ())))
-  
+
 
 setCallbacks :: IORef Quik -> HlTransactionCallback -> HlOrderCallback -> HlTradeCallback -> IO ()
 setCallbacks quik transCb orCb tradeCb = atomicModifyIORef' quik (\s ->
     ( s { hlTransactionCallback = Just transCb,
       hlOrderCallback = Just orCb,
       hlTradeCallback = Just tradeCb }, ()))
-  
+
 
 mkQuik :: FilePath -> FilePath -> IO (IORef Quik)
 mkQuik dllpath quikpath = do
   api <- loadQuikApi dllpath
-  
+
   debugM "Quik" "Dll loaded"
 
   myTid <- myThreadId
@@ -463,13 +463,15 @@ defaultTransactionReplyCb state transactionResult errorCode replyCode transId or
   when (replyMessage /= nullPtr) $ do
     s <- convert "CP1251" "UTF-8" . BL.fromStrict <$> BS.packCString replyMessage
     case decodeUtf8' (BL.toStrict s) of
-      Left _ -> warningM "Quik" "Unable to decode utf-8"
+      Left _    -> warningM "Quik" "Unable to decode utf-8"
       Right msg -> debugM "Quik" $ "Transaction cb message:" ++ T.unpack msg
-    
+
   maybecb <- hlTransactionCallback <$> readIORef state
   case maybecb of
-    Just cb -> cb (transactionResult == ecSuccess) (toInteger transId) (toInteger orderNum)
+    Just cb -> cb ((transactionResult == ecSuccess) && (replyCode /= rcInsufficientFunds)) (toInteger transId) (toInteger orderNum)
     Nothing -> return ()
+  where
+    rcInsufficientFunds = 4
 
 defaultOrderCb :: IORef Quik -> LONG -> DWORD -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> LONG -> CIntPtr -> IO ()
 defaultOrderCb state mode transId dnumber classCode secCode price balance value sell status desc = do
