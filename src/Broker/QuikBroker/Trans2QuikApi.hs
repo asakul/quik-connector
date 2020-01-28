@@ -526,8 +526,9 @@ defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sel
         qtSell = sell == 1,
         qtVolume = toDouble value,
         qtVolumeCurrency = currency,
-        qtTimestamp = mkTimestamp ymd hms us
+        qtTimestamp = adjustTimestamp $ mkTimestamp ymd hms us
       }
+      adjustTimestamp = addUTCTime (-3 * 3600) -- MSK -> UTC
       mkTimestamp ymd hms us = UTCTime (fromGregorian y mon d) (fromInteger (h * 3600 + m * 60 + s) + fromRational (us % 1000000))
         where
           y = ymd `div` 10000
