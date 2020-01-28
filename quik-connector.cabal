@@ -1,5 +1,5 @@
 name:                quik-connector
-version:             0.4.0.0
+version:             0.5.0.0
 synopsis:            Atrade-Quik Connector application
 description:         Please see README.md
 homepage:            https://github.com/asakul/quik-connector
@@ -7,7 +7,7 @@ license:             BSD3
 license-file:        LICENSE
 author:              Denis Tereshkin
 maintainer:          denis@kasan.ws
-copyright:           2016-2018 Denis Tereshkin
+copyright:           2016-2020 Denis Tereshkin
 category:            Web
 build-type:          Simple
 -- extra-source-files:
