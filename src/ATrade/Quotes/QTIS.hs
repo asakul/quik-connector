@@ -14,7 +14,6 @@ import qualified Data.ByteString.Char8 as BC8
 import qualified Data.ByteString.Lazy  as BL
 import           Data.Maybe
 import qualified Data.Text             as T
-import           System.Log.Logger
 import           System.ZMQ4
 
 data TickerInfo = TickerInfo {
@@ -41,15 +40,11 @@ qtisGetTickersInfo' endpoint tickers = withContext (\ctx -> qtisGetTickersInfo c
 qtisGetTickersInfo :: Context -> T.Text -> [TickerId] -> IO [TickerInfo]
 qtisGetTickersInfo ctx endpoint tickers =
   withSocket ctx Req (\sock -> do
-    debugM "QTIS" $ "Connecting to: " ++ T.unpack endpoint
     connect sock $ T.unpack endpoint
     catMaybes <$> forM tickers (\tickerId -> do
-      debugM "QTIS" $ "Requesting: " ++ T.unpack tickerId
       send sock [] $ BL.toStrict (tickerRequest tickerId)
       response <- receiveMulti sock
-      debugM "QTIS" $ show response
       let r = parseResponse response
-      debugM "QTIS" $ "Got response: " ++ show r
       return r))
   where
     tickerRequest tickerId = encode $ object ["ticker" .= tickerId]
