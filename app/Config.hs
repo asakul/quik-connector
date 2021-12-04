@@ -23,22 +23,23 @@ data TableConfig = TableConfig {
 } deriving (Show)
 
 data Config = Config {
-  quotesourceEndpoint        :: String,
-  qtisEndpoint               :: String,
-  pipeReaderQsEndpoint       :: Maybe String,
-  tickPipePath               :: Maybe String,
-  brokerserverEndpoint       :: String,
-  whitelist                  :: [T.Text],
-  blacklist                  :: [T.Text],
-  brokerServerCertPath       :: Maybe FilePath,
-  brokerClientCertificateDir :: Maybe FilePath,
-  tables                     :: [TableConfig],
-  quikPath                   :: String,
-  dllPath                    :: String,
-  quikAccounts               :: [T.Text],
-  tradeSink                  :: T.Text,
-  tradeSink2                 :: T.Text,
-  commissions                :: [CommissionConfig]
+  quotesourceEndpoint         :: String,
+  qtisEndpoint                :: String,
+  pipeReaderQsEndpoint        :: Maybe String,
+  tickPipePath                :: Maybe String,
+  brokerserverEndpoint        :: String,
+  brokerNotificationsEndpoint :: String,
+  whitelist                   :: [T.Text],
+  blacklist                   :: [T.Text],
+  brokerServerCertPath        :: Maybe FilePath,
+  brokerClientCertificateDir  :: Maybe FilePath,
+  tables                      :: [TableConfig],
+  quikPath                    :: String,
+  dllPath                     :: String,
+  quikAccounts                :: [T.Text],
+  tradeSink                   :: T.Text,
+  tradeSink2                  :: T.Text,
+  commissions                 :: [CommissionConfig]
 } deriving (Show)
 
 readConfig :: String -> IO Config
@@ -55,6 +56,7 @@ parseConfig = withObject "object" $ \obj -> do
   qsePipe <- obj .:? "quotesource-endpoint-pipe-reader"
   pipePath <- obj .:? "pipe-reader-path"
   bse <- obj .: "brokerserver-endpoint"
+  bsne <- obj .: "brokerserver-notifications-endpoint"
   whitelist' <- obj .:? "whitelist" .!= []
   blacklist' <- obj .:? "blacklist" .!= []
   serverCert <- obj .:? "broker_server_certificate"
@@ -73,6 +75,7 @@ parseConfig = withObject "object" $ \obj -> do
     pipeReaderQsEndpoint = qsePipe,
     tickPipePath = pipePath,
     brokerserverEndpoint = bse,
+    brokerNotificationsEndpoint = bsne,
     whitelist = whitelist',
     blacklist = blacklist',
     brokerServerCertPath = serverCert,

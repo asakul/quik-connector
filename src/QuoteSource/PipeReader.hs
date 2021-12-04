@@ -6,8 +6,11 @@ module QuoteSource.PipeReader (
   stopPipeReader
   ) where
 
+import           ATrade.Logging                 (Message, Severity (..),
+                                                 logWith)
 import           ATrade.QuoteSource.Server
 import           ATrade.Types
+import           Colog                          (LogAction)
 import           Control.Applicative
 import           Control.Concurrent             hiding (readChan, writeChan,
                                                  writeList2Chan, yield)
@@ -35,7 +38,6 @@ import           Data.Time.Clock
 import           Foreign.Marshal.Alloc
 import           Safe
 import           System.IO
-import           System.Log.Logger              (debugM, warningM)
 import           System.ZMQ4
 
 
@@ -46,10 +48,10 @@ data PipeReaderHandle =
                    } deriving (Eq)
 
 
-zmqSocketConduit :: (Subscriber a, Receiver a) => T.Text -> Socket a -> IORef Bool -> Source IO [B.ByteString]
-zmqSocketConduit ep sock running' = do
+zmqSocketConduit :: (Subscriber a, Receiver a) => T.Text -> Socket a -> IORef Bool -> LogAction IO Message -> Source IO [B.ByteString]
+zmqSocketConduit ep sock running' logger = do
   liftIO $ do
-    debugM "PipeReader" $ "Connecting to: " ++ T.unpack ep
+    logWith logger Info "PipeReader" $ "Connecting to: " <> ep
     connect sock (T.unpack ep)
     subscribe sock B.empty
   lastHeartbeat <- liftIO $ getCurrentTime >>= newIORef
@@ -59,7 +61,7 @@ zmqSocketConduit ep sock running' = do
       bs <- liftIO $ receiveMulti sock
       when ((not . null $ bs) && (head bs == "SYSTEM#HEARTBEAT")) $ liftIO $ getCurrentTime >>= writeIORef lastHeartbeat
       yield bs
-  zmqSocketConduit ep sock running'
+  zmqSocketConduit ep sock running' logger
   where
     notTimeout hb = do
       now <- liftIO $ getCurrentTime
@@ -80,16 +82,16 @@ chanSink chan = awaitForever
   (\t -> do
     liftIO $ writeChan chan t)
 
-startPipeReader :: Context -> T.Text -> BoundedChan QuoteSourceServerData -> IO PipeReaderHandle
-startPipeReader ctx pipeEndpoint tickChan = do
-  debugM "PipeReader" $ "Trying to open pipe: " ++ T.unpack pipeEndpoint
+startPipeReader :: Context -> T.Text -> BoundedChan QuoteSourceServerData -> LogAction IO Message -> IO PipeReaderHandle
+startPipeReader ctx pipeEndpoint tickChan logger = do
+  logWith logger Debug "PipeReader" $ "Trying to open pipe: " <> pipeEndpoint
   s <- socket ctx Sub
-  debugM "PipeReader" "Pipe opened"
+  logWith logger Info "PipeReader" "Pipe opened"
   running' <- newIORef True
   tid <- forkIO $ readerThread s running'
   return PipeReaderHandle { prThreadId = tid, running = running' }
     where
-      readerThread s running' = runConduit $ (zmqSocketConduit pipeEndpoint s running') =$= parseBarConduit =$= qssdataConduit =$= chanSink tickChan
+      readerThread s running' = runConduit $ (zmqSocketConduit pipeEndpoint s running' logger) =$= parseBarConduit =$= qssdataConduit =$= chanSink tickChan
 
 stopPipeReader :: PipeReaderHandle -> IO ()
 stopPipeReader h = killThread (prThreadId h) >> writeIORef (running h) False

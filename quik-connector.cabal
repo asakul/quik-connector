@@ -42,14 +42,13 @@ library
                      , transformers
                      , datetime
                      , BoundedChan
-                     , hslogger
                      , zeromq4-haskell
                      , hashable
                      , unordered-containers
                      , aeson
                      , cond
                      , scientific
-                     , libatrade >= 0.9 && < 0.10
+                     , libatrade >= 0.12 && < 0.13
                      , deepseq
                      , errors
                      , split
@@ -63,13 +62,15 @@ library
                      , http-client-tls
                      , utf8-string
                      , connection
-                     , text-format
                      , monad-loops
                      , extra
                      , incremental-parser
                      , attoparsec
                      , safe-exceptions
                      , iconv
+                     , th-printf
+                     , co-log
+                     , co-log-core
   default-language:    Haskell2010
 --  extra-libraries:     "user32"
   other-modules:       System.Win32.XlParser
@@ -86,7 +87,6 @@ executable quik-connector-exe
                      , haskell-gi-base
                      , gi-gtk
                      , BoundedChan
-                     , hslogger
                      , aeson
                      , bytestring
                      , unordered-containers
@@ -106,6 +106,8 @@ executable quik-connector-exe
                      , safe-exceptions
                      , iconv
                      , th-printf
+                     , co-log
+                     , co-log-core
   default-language:    Haskell2010
   other-modules:       Config
                      , Version

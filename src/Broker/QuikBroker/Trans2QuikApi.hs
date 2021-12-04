@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE QuasiQuotes        #-}
 
 module Broker.QuikBroker.Trans2QuikApi (
   Trans2QuikApi(..),
@@ -12,7 +13,9 @@ module Broker.QuikBroker.Trans2QuikApi (
   quikSendTransaction
 ) where
 
+import           ATrade.Logging             (Message, Severity (..), logWith)
 import           Codec.Text.IConv
+import           Colog                      (LogAction)
 import           Control.Concurrent
 import           Control.Error.Util
 import           Control.Exception.Safe
@@ -26,6 +29,7 @@ import           Data.Ratio
 import qualified Data.Set                   as S
 import qualified Data.Text                  as T
 import           Data.Text.Encoding
+import qualified Data.Text.Lazy             as TL
 import           Data.Time.Calendar
 import           Data.Time.Clock
 import           Data.Typeable
@@ -33,7 +37,8 @@ import           Foreign
 import           Foreign.C.String
 import           Foreign.C.Types
 import           Foreign.Marshal.Array
-import           System.Log.Logger
+import           Language.Haskell.Printf    (t)
+import           Prelude                    hiding (log)
 import           System.Win32.DLL
 import           System.Win32.Types
 
@@ -393,7 +398,9 @@ data Quik = Quik {
   watchdogTid           :: ThreadId,
 
   handledTrades         :: S.Set CLLong,
-  handledOrders         :: S.Set QuikOrder
+  handledOrders         :: S.Set QuikOrder,
+
+  logger                :: LogAction IO Message
 }
 
 quikSendTransaction :: IORef Quik -> String -> IO (Either T.Text ())
@@ -417,11 +424,12 @@ setCallbacks quik transCb orCb tradeCb = atomicModifyIORef' quik (\s ->
       hlTradeCallback = Just tradeCb }, ()))
 
 
-mkQuik :: FilePath -> FilePath -> IO (IORef Quik)
-mkQuik dllpath quikpath = do
+mkQuik :: FilePath -> FilePath -> LogAction IO Message -> IO (IORef Quik)
+mkQuik dllpath quikpath l = do
   api <- loadQuikApi dllpath
 
-  debugM "Quik" "Dll loaded"
+  let log = logWith l
+  log Debug "Quik" "Dll loaded"
 
   myTid <- myThreadId
   state <- newIORef Quik { quikApi = api,
@@ -432,7 +440,8 @@ mkQuik dllpath quikpath = do
     hlOrderCallback = Nothing,
     hlTradeCallback = Nothing,
     handledTrades = S.empty,
-    handledOrders = S.empty }
+    handledOrders = S.empty,
+    logger = l }
 
   conncb' <- mkConnectionStatusCallback (defaultConnectionCb state)
   transcb' <- mkTransactionsReplyCallback (defaultTransactionReplyCb state)
@@ -446,25 +455,29 @@ mkQuik dllpath quikpath = do
 
   tid <- forkIO $ watchdog quikpath state
   atomicModifyIORef' state (\s -> (s { watchdogTid = tid }, ()))
-  debugM "Quik" "mkQuik done"
+  log Debug "Quik" "mkQuik done"
   return state
 
 defaultConnectionCb :: IORef Quik -> LONG -> LONG -> LPSTR -> IO ()
 defaultConnectionCb state event errorCode infoMessage
-  | event == ecQuikConnected = infoM "Quik" "Quik connected" >> atomicModifyIORef' state (\s -> (s { connectedToServer = True }, ()) )
-  | event == ecQuikDisconnected = infoM "Quik" "Quik disconnected" >> atomicModifyIORef' state (\s -> (s { connectedToServer = False }, ()) )
-  | event == ecDllConnected = infoM "Quik" "DLL connected" >> atomicModifyIORef' state (\s -> (s { connectedToDll = True }, ()) )
-  | event == ecDllDisconnected = infoM "Quik" "DLL disconnected" >> atomicModifyIORef' state (\s -> (s { connectedToDll = True }, ()) )
-  | otherwise = debugM "Quik" $ "Connection event: " ++ show event
+  | event == ecQuikConnected = log Info "Quik" "Quik connected" >> atomicModifyIORef' state (\s -> (s { connectedToServer = True }, ()) )
+  | event == ecQuikDisconnected = log Info "Quik" "Quik disconnected" >> atomicModifyIORef' state (\s -> (s { connectedToServer = False }, ()) )
+  | event == ecDllConnected = log Info "Quik" "DLL connected" >> atomicModifyIORef' state (\s -> (s { connectedToDll = True }, ()) )
+  | event == ecDllDisconnected = log Info "Quik" "DLL disconnected" >> atomicModifyIORef' state (\s -> (s { connectedToDll = True }, ()) )
+  | otherwise = log Debug "Quik" $ "Connection event: " <> (T.pack . show) event
+  where
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 defaultTransactionReplyCb :: IORef Quik -> LONG -> LONG -> LONG -> DWORD -> CLLong -> LPSTR -> CIntPtr -> IO ()
 defaultTransactionReplyCb state transactionResult errorCode replyCode transId orderNum replyMessage replyDesc = do
-  debugM "Quik" $ "Transaction cb:" ++ show transactionResult ++ "/" ++ show errorCode ++ "/" ++ show replyCode
+  log Debug "Quik" $ TL.toStrict $ [t|Transaction cb: %d/%d/%d|] transactionResult  errorCode replyCode
   when (replyMessage /= nullPtr) $ do
     s <- convert "CP1251" "UTF-8" . BL.fromStrict <$> BS.packCString replyMessage
     case decodeUtf8' (BL.toStrict s) of
-      Left _    -> warningM "Quik" "Unable to decode utf-8"
-      Right msg -> debugM "Quik" $ "Transaction cb message:" ++ T.unpack msg
+      Left _    -> log Warning "Quik" "Unable to decode utf-8"
+      Right msg -> log Debug "Quik" $ "Transaction cb message:" <> msg
 
   maybecb <- hlTransactionCallback <$> readIORef state
   case maybecb of
@@ -472,10 +485,13 @@ defaultTransactionReplyCb state transactionResult errorCode replyCode transId or
     Nothing -> return ()
   where
     rcInsufficientFunds = 4
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 defaultOrderCb :: IORef Quik -> LONG -> DWORD -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> LONG -> CIntPtr -> IO ()
 defaultOrderCb state mode transId dnumber classCode secCode price balance value sell status desc = do
-  debugM "Quik" $ "Trade cb: " ++ show mode ++ "/" ++ show dnumber ++ "/" ++ show transId
+  log Debug "Quik" $ TL.toStrict $ [t|Trade cb: %d/%d/%d|] mode dnumber transId
   orders <- handledOrders <$> readIORef state
   when (mode == 0) $ do
     maybecb <- hlOrderCallback <$> readIORef state
@@ -487,21 +503,24 @@ defaultOrderCb state mode transId dnumber classCode secCode price balance value 
       case maybecb of
         Just cb -> cb order
         Nothing -> return ()
-      where
-        mkOrder :: String -> String -> QuikOrder
-        mkOrder sclass ssec = QuikOrder {
-          qoTransId = toInteger transId,
-          qoOrderId = toInteger dnumber,
-          qoTicker = sclass ++ "#" ++ ssec,
-          qoPrice = toDouble price,
-          qoBalance = toInteger balance,
-          qoSell = sell == 1,
-          qoStatus = fromIntegral status
-        }
+  where
+    mkOrder :: String -> String -> QuikOrder
+    mkOrder sclass ssec = QuikOrder {
+      qoTransId = toInteger transId,
+      qoOrderId = toInteger dnumber,
+      qoTicker = sclass ++ "#" ++ ssec,
+      qoPrice = toDouble price,
+      qoBalance = toInteger balance,
+      qoSell = sell == 1,
+      qoStatus = fromIntegral status
+    }
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 defaultTradeCb :: IORef Quik -> LONG -> CLLong -> CLLong -> LPSTR -> LPSTR -> CDouble -> CLLong -> CDouble -> LONG -> CIntPtr -> IO ()
 defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sell desc = do
-  debugM "Quik" $ "Trade cb: " ++ show mode ++ "/" ++ show dnumber
+  log Debug "Quik" $ TL.toStrict $ [t|Trade cb: %d/%d|] mode dnumber
   trades <- handledTrades <$> readIORef state
   when (mode == 0 && dnumber `S.notMember` trades) $ do
     atomicModifyIORef' state (\s -> (s { handledTrades = S.insert dnumber (handledTrades s) }, ()))
@@ -517,8 +536,8 @@ defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sel
         currency <- tradeCurrency api desc >>= peekCString
         cb (trade ssec sclass ymd hms us currency)
       Nothing -> return ()
-    where
-      trade ssec sclass ymd hms us currency = QuikTrade {
+  where
+    trade ssec sclass ymd hms us currency = QuikTrade {
         qtOrderId = toInteger orderNum,
         qtTicker = sclass ++ "#" ++ ssec,
         qtPrice = toDouble price,
@@ -528,8 +547,8 @@ defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sel
         qtVolumeCurrency = currency,
         qtTimestamp = adjustTimestamp $ mkTimestamp ymd hms us
       }
-      adjustTimestamp = addUTCTime (-3 * 3600) -- MSK -> UTC
-      mkTimestamp ymd hms us = UTCTime (fromGregorian y mon d) (fromInteger (h * 3600 + m * 60 + s) + fromRational (us % 1000000))
+    adjustTimestamp = addUTCTime (-3 * 3600) -- MSK -> UTC
+    mkTimestamp ymd hms us = UTCTime (fromGregorian y mon d) (fromInteger (h * 3600 + m * 60 + s) + fromRational (us % 1000000))
         where
           y = ymd `div` 10000
           mon = fromEnum $ (ymd `mod` 10000) `div` 100
@@ -537,6 +556,9 @@ defaultTradeCb state mode dnumber orderNum classCode secCode price qty value sel
           h = hms `div` 10000
           m = (hms `mod` 10000) `div` 100
           s = hms `mod` 100
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 
 watchdog :: FilePath -> IORef Quik -> IO ()
@@ -552,23 +574,27 @@ watchdog quikpath state = do
 
       err <- setConnectionStatusCallback api conncb errorCode errorMsg 1024
       if err /= ecSuccess
-        then warningM "Quik.Watchdog" $ "Error: " ++ show err
+        then log Warning "Quik.Watchdog" $ TL.toStrict $ [t|Error: %d|] err
         else forever $ do
           conn <- connectedToDll <$> readIORef state
           handle
-            (\(QuikException errmsg rc) -> warningM "Quik.Watchdog" $ (T.unpack errmsg) ++ " (" ++ show rc ++ ")") $
-            unless conn $
-              withCString quikpath (\path -> do
-                err <- connect api path errorCode errorMsg 1024
-                if err /= ecSuccess && err /= ecAlreadyConnectedToQuik
-                  then warningM "Quik.Watchdog" $ "Unable to connect: " ++ show err
-                  else withCString "" (\emptyStr -> do
-                    throwIfErr "setTransactionsReplyCallback returned error" $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
-                    throwIfErr "subscribeOrders returned error"  $ subscribeOrders api emptyStr emptyStr
-                    startOrders api orcb
-                    throwIfErr "subscribeTrades returned error"  $ subscribeTrades api emptyStr emptyStr
-                    startTrades api tradecb))
+            (\(QuikException errmsg rc) -> log Warning "Quik.Watchdog" $ TL.toStrict $ [t|%Q (%d)|] errmsg rc) $
+              unless conn $
+                withCString quikpath (\path -> do
+                  err <- connect api path errorCode errorMsg 1024
+                  if err /= ecSuccess && err /= ecAlreadyConnectedToQuik
+                    then log Debug "Quik.Watchdog" $ "Unable to connect: " <> (T.pack . show) err
+                    else withCString "" (\emptyStr -> do
+                      throwIfErr "setTransactionsReplyCallback returned error" $ setTransactionsReplyCallback api transcb errorCode errorMsg 1024
+                      throwIfErr "subscribeOrders returned error"  $ subscribeOrders api emptyStr emptyStr
+                      startOrders api orcb
+                      throwIfErr "subscribeTrades returned error"  $ subscribeTrades api emptyStr emptyStr
+                      startTrades api tradecb))
           threadDelay 10000000))
+  where
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 throwIfErr :: T.Text -> IO LONG -> IO ()
 throwIfErr errmsg action = do

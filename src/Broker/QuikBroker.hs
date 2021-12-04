@@ -1,49 +1,55 @@
+{-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE MultiWayIf        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE QuasiQuotes       #-}
 
 module Broker.QuikBroker (
   mkQuikBroker
 ) where
 
-import ATrade.Types
-import ATrade.Broker.Protocol
-import ATrade.Broker.Server
-import ATrade.Quotes.QTIS (TickerInfo(..))
+import           ATrade.Broker.Backend
+import           ATrade.Broker.Protocol
+import           ATrade.Broker.Server
+import           ATrade.Quotes.QTIS              (TickerInfo (..))
+import           ATrade.Types
 
-import Broker.QuikBroker.Trans2QuikApi hiding (tradeAccount)
+import           Broker.QuikBroker.Trans2QuikApi hiding (logger, tradeAccount)
 
-import Data.IORef
-import Data.List.Split
-import qualified Data.List as L
-import qualified Data.Map as M
-import qualified Data.Bimap as BM
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import Data.Text.Format
+import qualified Data.Bimap                      as BM
+import           Data.IORef
+import qualified Data.List                       as L
+import           Data.List.Split
+import qualified Data.Map                        as M
+import qualified Data.Text                       as T
+import qualified Data.Text.Lazy                  as TL
 
-import Control.Monad
-import Control.Concurrent
-import Control.Concurrent.BoundedChan
-import Control.Monad.Trans.Except
-import Control.Monad.IO.Class
-import System.Log.Logger
+import           ATrade.Logging                  (Message, Severity (..),
+                                                  logWith)
+import           Colog                           (LogAction)
+import           Control.Concurrent
+import           Control.Concurrent.BoundedChan
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Except
+import           Language.Haskell.Printf         (t)
 
-import Safe
+import           Safe
 
-import Commissions (CommissionConfig(..))
-import TickTable (TickTableH, getTick, getTickerInfo, TickKey(..))
+import           Commissions                     (CommissionConfig (..))
+import           TickTable                       (TickKey (..), TickTableH,
+                                                  getTick, getTickerInfo)
 
 type QuikOrderId = Integer
 
 data QuikBrokerState = QuikBrokerState {
-  notificationCallback :: Maybe (Notification -> IO ()),
-  quik :: IORef Quik,
-  orderMap :: M.Map OrderId Order,
-  orderIdMap :: BM.Bimap QuikOrderId OrderId,
-  trans2orderid :: M.Map Integer Order,
-  transIdCounter :: Integer,
-  tickTable :: TickTableH
+  notificationCallback :: Maybe (BrokerBackendNotification -> IO ()),
+  quik                 :: IORef Quik,
+  orderMap             :: M.Map OrderId Order,
+  orderIdMap           :: BM.Bimap QuikOrderId OrderId,
+  trans2orderid        :: M.Map Integer Order,
+  transIdCounter       :: Integer,
+  tickTable            :: TickTableH,
+  logger               :: LogAction IO Message
 }
 
 nextTransId state = atomicModifyIORef' state (\s -> (s { transIdCounter = transIdCounter s + 1 }, transIdCounter s))
@@ -52,11 +58,11 @@ maybeCall proj state arg = do
   cb <- proj <$> readIORef state
   case cb of
     Just callback -> callback arg
-    Nothing -> return ()
+    Nothing       -> return ()
 
-mkQuikBroker :: TickTableH -> FilePath -> FilePath -> [T.Text] -> [CommissionConfig] -> IO BrokerInterface
-mkQuikBroker tt dllPath quikPath accs comms = do
-  q <- mkQuik dllPath quikPath
+mkQuikBroker :: TickTableH -> FilePath -> FilePath -> [T.Text] -> [CommissionConfig] -> LogAction IO Message -> IO BrokerBackend
+mkQuikBroker tt dllPath quikPath accs comms l = do
+  q <- mkQuik dllPath quikPath l
 
   msgChan <- newBoundedChan 100
 
@@ -67,17 +73,18 @@ mkQuikBroker tt dllPath quikPath accs comms = do
     orderIdMap = BM.empty,
     trans2orderid = M.empty,
     transIdCounter = 1,
-    tickTable = tt
+    tickTable = tt,
+    logger = l
   }
 
   setCallbacks q (qbTransactionCallback state) (qbOrderCallback state) (qbTradeCallback state comms)
 
-  return BrokerInterface {
+  return BrokerBackend {
     accounts = accs,
     setNotificationCallback = qbSetNotificationCallback state,
     submitOrder = qbSubmitOrder state,
-    cancelOrder = qbCancelOrder state,
-    stopBroker = qbStopBroker state
+    cancelOrder = void . qbCancelOrder state,
+    stop = qbStopBroker state
   }
 
 qbSetNotificationCallback state maybecb = atomicModifyIORef' state (\s -> (s {
@@ -88,24 +95,28 @@ qbSubmitOrder state order = do
   transId <- nextTransId state
   atomicModifyIORef' state (\s -> (s {
     trans2orderid = M.insert transId order (trans2orderid s) }, ()))
-  debugM "Quik" "Getting ticktable"
+  log Debug "Quik" "Getting ticktable"
   tt <- tickTable <$> readIORef state
-  debugM "Quik" "Getting tickerinfo from ticktable"
+  log Debug "Quik" "Getting tickerinfo from ticktable"
   tickerInfoMb <- getTickerInfo tt (orderSecurity order)
-  debugM "Quik" "Getting liquid ticks"
+  log Debug "Quik" "Getting liquid ticks"
   liquidTickMb <- getTick tt (TickKey (orderSecurity order) (if orderOperation order == Buy then BestOffer else BestBid))
-  debugM "Quik" "Obtained"
+  log Debug "Quik" "Obtained"
   case (tickerInfoMb, liquidTickMb) of
-    (Just !tickerInfo, Just !liquidTick) -> 
+    (Just !tickerInfo, Just !liquidTick) ->
       case makeTransactionString tickerInfo liquidTick transId order of
         Just transStr -> do
           rc <- quikSendTransaction q transStr
-          debugM "Quik" $ "Sending transaction string: " ++ transStr
+          log Debug "Quik" $ "Sending transaction string: " <> T.pack transStr
           case rc of
-            Left errmsg -> warningM "Quik" $ "Unable to send transaction: " ++ T.unpack errmsg
-            Right _ -> debugM "Quik" $ "Order submitted: " ++ show order
-        Nothing -> warningM "Quik" $ "Unable to compose transaction string: " ++ show order
-    _ -> warningM "Quik" $ "Unable to obtain data: " ++ show tickerInfoMb ++ "/" ++ show liquidTickMb
+            Left errmsg -> log Warning "Quik" $ "Unable to send transaction: " <> errmsg
+            Right _ -> log Debug "Quik" $ "Order submitted: " <> (T.pack . show) order
+        Nothing -> log Warning "Quik" $ "Unable to compose transaction string: " <> (T.pack . show) order
+    _ -> log Warning "Quik" $ TL.toStrict $ [t|Unable to obtain data: %?/%?|] tickerInfoMb liquidTickMb
+  where
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 
 qbCancelOrder state orderid = do
@@ -118,10 +129,14 @@ qbCancelOrder state orderid = do
       Just transString -> do
         rc <- quikSendTransaction q transString
         case rc of
-          Left errmsg -> warningM "Quik" ("Unable to send transaction: " ++ T.unpack errmsg) >> return False
-          Right _ -> debugM "Quik" ("Order cancelled: " ++ show orderid) >> return True
-      Nothing -> warningM "Quik" ("Unable to compose transaction string: " ++ show orderid) >> return False 
-    _ -> warningM "Quik" ("Got request to cancel unknown order: " ++ show orderid) >> return False
+          Left errmsg -> log Warning "Quik" ("Unable to send transaction: " <> errmsg) >> return False
+          Right _ -> log Debug "Quik" ("Order cancelled: " <> (T.pack . show) orderid) >> return True
+      Nothing -> log Warning "Quik" ("Unable to compose transaction string: " <> (T.pack . show) orderid) >> return False
+    _ -> log Warning "Quik" ("Got request to cancel unknown order: " <> (T.pack . show) orderid) >> return False
+  where
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
 
 qbStopBroker state = return ()
 
@@ -139,11 +154,11 @@ makeTransactionString tickerInfo liquidTick transId order =
     _ -> Nothing
   where
     orderTypeCode = case orderPrice order of
-      Market -> "L"
+      Market  -> "L"
       Limit _ -> "L"
-      _ -> "X"
+      _       -> "X"
     operationCode = case orderOperation order of
-      Buy -> "B"
+      Buy  -> "B"
       Sell -> "S"
     classcode = headMay . splitOn "#" . T.unpack $ orderSecurity order
     seccode = (`atMay` 1) . splitOn "#" . T.unpack $ orderSecurity order
@@ -179,7 +194,7 @@ qbTransactionCallback state success transactionId orderNum = do
       newOrder <- if success
         then registerOrder orderNum $ order { orderState = Unsubmitted }
         else registerOrder orderNum $ order { orderState = Rejected }
-      maybeCall notificationCallback state (OrderNotification (orderId newOrder) (orderState newOrder))
+      maybeCall notificationCallback state (BackendOrderNotification (orderId newOrder) (orderState newOrder))
 
     Nothing -> return ()
   where
@@ -190,7 +205,7 @@ qbTransactionCallback state success transactionId orderNum = do
 qbOrderCallback state quikorder = do
   orders <- orderMap <$> readIORef state
   idMap <- orderIdMap <$> readIORef state
-  debugM "Quik" $ "Order: " ++ show quikorder
+  log Debug "Quik" $ "Order: " <> (T.pack . show) quikorder
   case BM.lookup (qoOrderId quikorder) idMap >>= flip M.lookup orders of
     Just order -> do
       updatedOrder <- if | qoStatus quikorder /= 1 && qoStatus quikorder /= 2 ->
@@ -201,8 +216,8 @@ qbOrderCallback state quikorder = do
                             submitted order
                          | qoStatus quikorder == 2 ->
                             cancelled order
-      maybeCall notificationCallback state (OrderNotification (orderId updatedOrder) (orderState updatedOrder))
-    Nothing -> warningM "Quik" $ "Unknown order: state callback called: " ++ show quikorder
+      maybeCall notificationCallback state (BackendOrderNotification (orderId updatedOrder) (orderState updatedOrder))
+    Nothing -> log Warning "Quik" $ "Unknown order: state callback called: " <> (T.pack . show) quikorder
 
   where
     updateOrder :: Order -> IO Order
@@ -214,15 +229,19 @@ qbOrderCallback state quikorder = do
     submitted order = updateOrder $ order { orderState = Submitted }
     cancelled order = updateOrder $ order { orderState = Cancelled }
 
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
+
 qbTradeCallback state comms quiktrade = do
   orders <- orderMap <$> readIORef state
   idMap <- orderIdMap <$> readIORef state
-  debugM "Quik" $ "Trade: " ++ show quiktrade
+  log Debug "Quik" $ "Trade: " <> (T.pack . show) quiktrade
   case BM.lookup (qtOrderId quiktrade) idMap >>= flip M.lookup orders of
     Just order -> do
-      debugM "Quik" $ "Found comm: " ++ show (L.find (\x -> comPrefix x `T.isPrefixOf` orderSecurity order) comms)
-      maybeCall notificationCallback state (TradeNotification $ tradeFor order)
-    Nothing -> warningM "Quik" $ "Incoming trade for unknown order: " ++ show quiktrade
+      log Debug "Quik" $ "Found comm: " <> (T.pack . show) (L.find (\x -> comPrefix x `T.isPrefixOf` orderSecurity order) comms)
+      maybeCall notificationCallback state (BackendTradeNotification $ tradeFor order)
+    Nothing -> log Warning "Quik" $ "Incoming trade for unknown order: " <> (T.pack . show) quiktrade
   where
     tradeFor order = Trade {
       tradeOrderId = orderId order,
@@ -241,3 +260,6 @@ qbTradeCallback state comms quiktrade = do
       Just com -> vol * fromDouble (0.01 * comPercentage com) + fromDouble (comFixed com) * fromIntegral qty
       Nothing -> 0
 
+    log sev comp txt = do
+      l <- logger <$> readIORef state
+      logWith l sev comp txt
