@@ -43,10 +43,21 @@ import           System.ZMQ4
 
 data PipeReaderHandle =
   PipeReaderHandle {
-    prThreadId :: ThreadId,
-    running    :: IORef Bool
+    prThreadId     :: ThreadId,
+    prTickThreadId :: ThreadId,
+    running        :: IORef Bool
                    } deriving (Eq)
 
+deserializeTicks :: [B.ByteString] -> [Tick]
+deserializeTicks (secname:raw:_) = case decodeUtf8' secname of
+  Right tid -> deserializeWithName tid $ BL.fromStrict raw
+  Left _    -> []
+  where
+    deserializeWithName secNameT raw = case deserializeTickBody raw of
+      (rest, Just tick) -> tick { security = secNameT } : deserializeWithName secNameT rest
+      _ -> []
+
+deserializeTicks _ = []
 
 zmqSocketConduit :: (Subscriber a, Receiver a) => T.Text -> Socket a -> IORef Bool -> LogAction IO Message -> Source IO [B.ByteString]
 zmqSocketConduit ep sock running' logger = do
@@ -74,24 +85,39 @@ parseBarConduit = awaitForever $ \bs ->
     Just (tf, bar) -> yield (barSecurity bar, tf, bar)
     _              -> return ()
 
+parseTickConduit :: Conduit [B.ByteString] IO ([Tick])
+parseTickConduit = awaitForever $ \bs -> do
+  yield $ deserializeTicks bs
+
 qssdataConduit :: Conduit (TickerId, BarTimeframe, Bar) IO QuoteSourceServerData
 qssdataConduit = awaitForever $ \(tid, tf, bar) -> yield $ QSSBar (tf, bar)
+
+qsstickdataConduit :: Conduit [Tick] IO QuoteSourceServerData
+qsstickdataConduit = awaitForever $ \ticks -> forM_ ticks $ \tick -> yield $ QSSTick tick
 
 chanSink :: (Show a) => BoundedChan a -> Sink a IO ()
 chanSink chan = awaitForever
   (\t -> do
     liftIO $ writeChan chan t)
 
-startPipeReader :: Context -> T.Text -> BoundedChan QuoteSourceServerData -> LogAction IO Message -> IO PipeReaderHandle
-startPipeReader ctx pipeEndpoint tickChan logger = do
+startPipeReader :: Context -> T.Text -> T.Text -> BoundedChan QuoteSourceServerData -> LogAction IO Message -> IO PipeReaderHandle
+startPipeReader ctx pipeEndpoint tickPipeEndpoint tickChan logger = do
   logWith logger Debug "PipeReader" $ "Trying to open pipe: " <> pipeEndpoint
   s <- socket ctx Sub
   logWith logger Info "PipeReader" "Pipe opened"
+  tickSocket <- socket ctx Sub
+  logWith logger Info "PipeReader" "Tick pipe opened"
   running' <- newIORef True
   tid <- forkIO $ readerThread s running'
-  return PipeReaderHandle { prThreadId = tid, running = running' }
+  tid2 <- forkIO $ tickReaderThread tickSocket running'
+  return PipeReaderHandle { prThreadId = tid, prTickThreadId = tid2, running = running' }
     where
       readerThread s running' = runConduit $ (zmqSocketConduit pipeEndpoint s running' logger) =$= parseBarConduit =$= qssdataConduit =$= chanSink tickChan
+      tickReaderThread s running' = runConduit $
+                                      (zmqSocketConduit tickPipeEndpoint s running' logger)
+                                  =$= parseTickConduit
+                                  =$= qsstickdataConduit
+                                  =$= chanSink tickChan
 
 stopPipeReader :: PipeReaderHandle -> IO ()
-stopPipeReader h = killThread (prThreadId h) >> writeIORef (running h) False
+stopPipeReader h = killThread (prThreadId h) >> killThread (prTickThreadId h) >> writeIORef (running h) False

@@ -8,20 +8,17 @@ import           System.IO
 
 import           ATrade.QuoteSource.Server
 import           ATrade.Types
-import           Control.Concurrent                            hiding (readChan,
-                                                                writeChan)
+import           Control.Concurrent                    hiding (readChan,
+                                                        writeChan)
 import           Control.Concurrent.BoundedChan
 import           Control.Error.Util
 import           Control.Exception.Safe
 import           Control.Monad
-import           Control.Monad.IO.Class                        (MonadIO)
+import           Control.Monad.IO.Class                (MonadIO)
 import           Data.GI.Base
-import qualified GI.Gtk                                        as Gtk
-import           Prelude                                       hiding (log)
-import           QuoteSource.DataImport
+import qualified GI.Gtk                                as Gtk
+import           Prelude                               hiding (log)
 import           QuoteSource.PipeReader
-import           QuoteSource.TableParser
-import           QuoteSource.TableParsers.AllParamsTableParser
 
 import           ATrade.Broker.Server
 import           ATrade.Broker.TradeSinks.ZMQTradeSink
@@ -34,32 +31,33 @@ import           System.ZMQ4
 import           System.ZMQ4.ZAP
 
 import           Data.Maybe
-import qualified Data.Text                                     as T
+import qualified Data.Text                             as T
 import           Data.Version
 
-import           ATrade                                        (libatrade_gitrev,
-                                                                libatrade_version)
-import           ATrade.Logging                                (Message, Severity (Debug, Info, Warning),
-                                                                fmtMessage,
-                                                                logWith)
-import           Colog                                         (LogAction,
-                                                                logTextStdout,
-                                                                (>$<))
-import           Colog.Actions                                 (logTextHandle)
+import           ATrade                                (libatrade_gitrev,
+                                                        libatrade_version)
+import           ATrade.Logging                        (Message, Severity (Debug, Info, Warning),
+                                                        fmtMessage, logWith)
+import           Colog                                 (LogAction,
+                                                        logTextStdout, (>$<))
+import           Colog.Actions                         (logTextHandle)
 import           Config
-import           TickTable                                     (mkTickTable)
+import           TickTable                             (mkTickTable)
 import           Version
 
-forkBoundedChan :: Int -> BoundedChan Tick -> IO (ThreadId, BoundedChan Tick, BoundedChan Tick, BoundedChan QuoteSourceServerData)
+forkBoundedChan :: Int -> BoundedChan QuoteSourceServerData -> IO (ThreadId, BoundedChan Tick, BoundedChan Tick, BoundedChan QuoteSourceServerData)
 forkBoundedChan size sourceChan = do
   sink1 <- newBoundedChan size
   sink2 <- newBoundedChan size
   sinkQss <- newBoundedChan size
   tid <- forkIO $ forever $ do
       v <- readChan sourceChan
-      writeChan sink1 v
-      writeChan sink2 v
-      writeChan sinkQss (QSSTick v)
+      case v of
+        QSSTick t -> do
+          writeChan sink1 t
+          writeChan sink2 t
+        _ -> return ()
+      writeChan sinkQss v
 
   return (tid, sink1, sink2, sinkQss)
 
@@ -83,8 +81,6 @@ main = do
 
     log Info "main" "Config loaded"
     chan <- newBoundedChan 10000
-    log Info "main" "Starting data import server"
-    _ <- initDataImportServer [MkTableParser $ mkAllParamsTableParser "allparams"] chan "atrade"
 
     (forkId, c0, c1, c2) <- forkBoundedChan 10000 chan
 
@@ -114,7 +110,7 @@ main = do
         let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
           sspCertificate = serverCert }
 
-        bracket (forkIO $ pipeReaderThread ctx config c2 logger) killThread (\_ -> do
+        bracket (forkIO $ pipeReaderThread ctx config chan logger) killThread (\_ -> do
           withZMQTradeSink ctx (tradeSink config) (\zmqTradeSink -> do
             withZMQTradeSink ctx (tradeSink2 config) (\zmqTradeSink2 -> do
               bracket (startQuoteSourceServer c2 ctx (T.pack $ quotesourceEndpoint config) quoteSourceServerSecurityParams) stopQuoteSourceServer (\_ -> do
@@ -140,10 +136,10 @@ main = do
     log Info "main" "Main thread done"
   where
     pipeReaderThread ctx config qsdataChan logger =
-      case pipeReaderQsEndpoint config of
-        Just qsep -> do
+      case (pipeReaderQsEndpoint config, tickPipePath config) of
+        (Just qsep, Just tep) -> do
           logWith logger Info "main" $ "QS: " <> T.pack qsep
-          bracket (startPipeReader ctx (T.pack qsep) qsdataChan logger) stopPipeReader (\_ -> forever $ threadDelay 1000000)
+          bracket (startPipeReader ctx (T.pack qsep) (T.pack tep) qsdataChan logger) stopPipeReader (\_ -> forever $ threadDelay 1000000)
         _ -> return ()
     quoteSourceServerSecurityParams = defaultServerSecurityParams { sspDomain = Just "global" }
 
