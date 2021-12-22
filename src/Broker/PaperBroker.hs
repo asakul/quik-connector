@@ -212,7 +212,9 @@ pbSubmitOrder state order = do
       case tickMb of
         Nothing -> rejectOrder state order
         Just tick -> if orderQuantity order /= 0
-          then executeAtTick state order tick
+          then do
+            maybeCall notificationCallback state $ BackendOrderNotification (orderId order) Submitted
+            executeAtTick state order tick
           else rejectOrder state order
     submitLimitOrder price state order = if orderQuantity order == 0
       then rejectOrder state order
