@@ -89,13 +89,15 @@ main = do
       brokerQ <- mkQuikBroker tickTable (dllPath config) (quikPath config) (quikAccounts config) (commissions config) logger
       brokerP <- mkPaperBroker tickTable c1 1000000 ["demo"] (commissions config) logger
       withZapHandler ctx (\zap -> do
-        zapSetWhitelist zap "global" $ whitelist config
-        zapSetBlacklist zap "global" $ blacklist config
+        zapSetWhitelist zap "broker" $ whitelist config
+        zapSetBlacklist zap "broker" $ blacklist config
+        zapSetWhitelist zap "quotesource" $ whitelist config
+        zapSetBlacklist zap "quotesource" $ blacklist config
 
         case brokerClientCertificateDir config of
           Just certFile -> do
             certs <- loadCertificatesFromDirectory certFile
-            forM_ certs (\cert -> zapAddClientCertificate zap "global" cert)
+            forM_ certs (\cert -> zapAddClientCertificate zap "broker" cert)
           Nothing -> return ()
 
         serverCert <- case brokerServerCertPath config of
@@ -107,7 +109,7 @@ main = do
                 return Nothing
               Right cert -> return $ Just cert
           Nothing -> return Nothing
-        let serverParams = defaultServerSecurityParams { sspDomain = Just "global",
+        let serverParams = defaultServerSecurityParams { sspDomain = Just "broker",
           sspCertificate = serverCert }
 
         bracket (forkIO $ pipeReaderThread ctx config chan logger) killThread (\_ -> do
@@ -141,11 +143,11 @@ main = do
           logWith logger Info "main" $ "QS: " <> T.pack qsep
           bracket (startPipeReader ctx (T.pack qsep) (T.pack tep) qsdataChan logger) stopPipeReader (\_ -> forever $ threadDelay 1000000)
         _ -> return ()
-    quoteSourceServerSecurityParams = defaultServerSecurityParams { sspDomain = Just "global" }
+    quoteSourceServerSecurityParams = defaultServerSecurityParams { sspDomain = Just "quotesource" }
 
 
 loadCertificatesFromDirectory :: FilePath -> IO [CurveCertificate]
 loadCertificatesFromDirectory filepath = do
   files <- listDirectory filepath
-  catMaybes <$> forM files (\file -> hush <$> loadCertificateFromFile file)
+  catMaybes <$> forM files (\file -> hush <$> loadCertificateFromFile (filepath <> "/" <> file))
 
